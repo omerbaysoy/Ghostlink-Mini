@@ -162,6 +162,20 @@ def cmd_scan(iface=None):
             return
     print("\nResults saved to database.")
 
+def _find_target_network(iface, ssid, bssid=None):
+    target_bssid = bssid.lower() if bssid else None
+    matches = []
+    for network in scan_networks(iface):
+        if network.get("ssid") != ssid:
+            continue
+        if target_bssid and network.get("bssid", "").lower() != target_bssid:
+            continue
+        matches.append(network)
+    if not matches:
+        return None
+    matches.sort(key=lambda n: n.get("signal", 0), reverse=True)
+    return matches[0]
+
 def cmd_pentest(ssid, iface=None, bssid=None):
     adapters = detect_adapters()
     if not iface:
@@ -195,15 +209,26 @@ def cmd_pentest(ssid, iface=None, bssid=None):
     if confirm.lower() != 'y':
         print("Aborted.")
         return
+
+    target = _find_target_network(iface, ssid, bssid)
+    target_bssid = bssid
+    target_channel = None
+    if target:
+        target_bssid = target.get("bssid") or bssid
+        target_channel = target.get("channel")
+        print(f"Target seen: BSSID {target_bssid}, channel {target_channel}, signal {target.get('signal')}")
+    else:
+        print("Warning: target was not visible in a preflight scan. Wifite will still try to find it.")
         
     print("Launching Wifite (this may take a while)...")
-    result = start_pentest(iface, ssid, bssid)
+    result = start_pentest(iface, ssid, target_bssid, target_channel)
     
     if result["status"] == "success":
         print(f"\n[+] SUCCESS: Recovered key for {ssid}")
         try:
-            pentest_id = save_pentest_job(ssid, result.get("bssid", bssid), iface, "wifite", "success", result.get("log_path", ""))
-            save_credential(pentest_id, ssid, result.get("bssid", bssid), result["password"], iface)
+            result_bssid = result.get("bssid", target_bssid)
+            pentest_id = save_pentest_job(ssid, result_bssid, iface, "wifite", "success", result.get("log_path", ""))
+            save_credential(pentest_id, ssid, result_bssid, result["password"], iface)
             print("Credentials saved to database.")
         except RuntimeError as e:
             print(f"Warning: credentials were not saved: {e}")
@@ -219,7 +244,7 @@ def cmd_pentest(ssid, iface=None, bssid=None):
         print(f"\n[-] FAILED: {result.get('message')}")
         print(f"Log saved to: {result.get('log_path')}")
         try:
-            save_pentest_job(ssid, bssid, iface, "wifite", "failed", result.get("log_path", ""))
+            save_pentest_job(ssid, target_bssid, iface, "wifite", "failed", result.get("log_path", ""))
         except RuntimeError as e:
             print(f"Warning: pentest result was not saved: {e}")
 
@@ -233,12 +258,12 @@ def do_connect(ssid, password):
     print(f"Connecting {iface} to {ssid}...")
     success = connect_network(iface, ssid, password)
     if success:
-        print("Connection command sent. Checking internet...")
+        print("Connection command sent. Checking internet through the target adapter...")
         time.sleep(5)
-        if check_internet():
-            print("[+] Connected and internet is reachable.")
+        if check_internet(iface):
+            print("[+] Connected and internet is reachable through the target adapter.")
         else:
-            print("[-] Connected, but internet is NOT reachable.")
+            print("[-] Connected, but internet is NOT reachable through the target adapter.")
     else:
         print("[-] Failed to connect.")
 

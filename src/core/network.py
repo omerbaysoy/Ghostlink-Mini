@@ -213,6 +213,8 @@ def connect_network(iface, ssid, password):
     if not is_wireless_interface(iface):
         return False
 
+    run_cmd_no_check(f"nmcli device set {shlex.quote(iface)} managed yes")
+    run_cmd_no_check(f"ip link set {shlex.quote(iface)} up")
     run_cmd(f"nmcli device disconnect {shlex.quote(iface)}")
 
     cmd = (
@@ -225,9 +227,12 @@ def connect_network(iface, ssid, password):
         return True
     return False
 
-def check_internet():
+def check_internet(iface=None):
     # Simple ping check to see if we have internet routing
-    out, code = run_cmd_no_check("ping -c 1 -W 2 8.8.8.8")
+    if iface:
+        out, code = run_cmd_no_check(f"ping -I {shlex.quote(iface)} -c 1 -W 2 8.8.8.8")
+    else:
+        out, code = run_cmd_no_check("ping -c 1 -W 2 8.8.8.8")
     return code == 0
 
 def require_root(action):
