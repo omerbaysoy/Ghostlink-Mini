@@ -82,9 +82,9 @@ def detect_adapters():
         if iface == adapters["management"]:
             continue
         driver = get_driver(iface)
-        if driver in ["8812au", "rtw_8812au"]:
+        if driver in ["8812au", "88XXau", "rtw_8812au", "rtw88_8812au"]:
             adapters["rtl8812au"] = iface
-        elif driver in ["88x2bu", "rtw_8822bu"]:
+        elif driver in ["88x2bu", "rtw_8822bu", "rtw88_8822bu"]:
             adapters["rtl88x2bu"] = iface
         elif driver in ["r8188eu", "8188eu"]:
             adapters["rtl8188eus"] = iface

@@ -8,6 +8,9 @@ INSTALL_DIR="/opt/ghostlink-mini"
 SRC_ENTRY="src/ghostlink.py"
 LAUNCHER="/usr/local/bin/ghostlink"
 SETUP_LOG="/var/log/ghostlink/setup.log"
+DRIVER_TIMEOUT_SECONDS="${GHOSTLINK_DRIVER_TIMEOUT_SECONDS:-1800}"
+export DEBIAN_FRONTEND=noninteractive
+export APT_LISTCHANGES_FRONTEND=none
 
 UPDATE_MODE=0
 
@@ -57,6 +60,30 @@ log() {
 run_logged() {
     log "[cmd] $*"
     "$@" >>"$SETUP_LOG" 2>&1
+}
+
+run_logged_timeout() {
+    local seconds="$1"
+    shift
+    log "[cmd timeout ${seconds}s] $*"
+    timeout "$seconds" "$@" >>"$SETUP_LOG" 2>&1
+    local code=$?
+    if [ "$code" -eq 124 ]; then
+        log "[-] Command timed out after ${seconds}s: $*"
+    fi
+    return "$code"
+}
+
+run_shell_logged_timeout() {
+    local seconds="$1"
+    local script="$2"
+    log "[cmd timeout ${seconds}s] $script"
+    timeout "$seconds" bash -lc "$script" >>"$SETUP_LOG" 2>&1
+    local code=$?
+    if [ "$code" -eq 124 ]; then
+        log "[-] Command timed out after ${seconds}s: $script"
+    fi
+    return "$code"
 }
 
 set_runtime_permissions() {
@@ -263,32 +290,129 @@ install_kernel_headers() {
     return 1
 }
 
+module_available() {
+    local module
+    for module in "$@"; do
+        modinfo "$module" >/dev/null 2>&1 && return 0
+    done
+    return 1
+}
+
+remove_dkms_module_versions() {
+    local module="$1"
+    local line version
+
+    while IFS= read -r line; do
+        version="${line#"$module/"}"
+        version="${version%%:*}"
+        version="${version%%,*}"
+        if [ -n "$version" ] && [ "$version" != "$line" ]; then
+            log "[+] Removing stale DKMS module $module/$version..."
+            dkms remove -m "$module" -v "$version" --all >>"$SETUP_LOG" 2>&1 || true
+        fi
+    done < <(dkms status "$module" 2>/dev/null || true)
+}
+
+rtl8812au_ready() {
+    module_available 88XXau rtw_8812au rtw88_8812au
+}
+
+rtl88x2bu_ready() {
+    module_available rtw_8822bu rtw88_8822bu
+}
+
+install_rtl8812au_pentest_driver() {
+    local dir_name="rtl8812au"
+    local repo_url="https://github.com/aircrack-ng/rtl8812au.git"
+    local branch="v5.6.4.2"
+    local arch
+    arch="$(dpkg --print-architecture 2>/dev/null || uname -m)"
+
+    if module_available 88XXau; then
+        log "[+] Driver RTL8812AU pentest module (88XXau) already installed."
+        return 0
+    fi
+
+    if ! kernel_headers_available; then
+        log "[-] Kernel headers for $(uname -r) are missing; cannot build RTL8812AU pentest driver."
+        return 1
+    fi
+
+    log "[+] Installing RTL8812AU pentest driver via aircrack-ng/rtl8812au..."
+    mkdir -p /usr/src
+
+    if [ -d "/usr/src/$dir_name/.git" ]; then
+        run_logged_timeout 300 git -C "/usr/src/$dir_name" fetch --tags origin || return 1
+        run_logged git -C "/usr/src/$dir_name" checkout "$branch" || return 1
+        run_logged git -C "/usr/src/$dir_name" reset --hard "$branch" || return 1
+        run_logged_timeout 300 git -C "/usr/src/$dir_name" pull --ff-only || return 1
+    elif [ -e "/usr/src/$dir_name" ]; then
+        log "[-] /usr/src/$dir_name exists but is not a git checkout. Move it aside and rerun setup."
+        return 1
+    else
+        run_logged_timeout 600 git clone -b "$branch" --single-branch "$repo_url" "/usr/src/$dir_name" || return 1
+    fi
+
+    case "$arch" in
+        arm64|aarch64)
+            run_logged sed -i 's/CONFIG_PLATFORM_I386_PC = y/CONFIG_PLATFORM_I386_PC = n/g' "/usr/src/$dir_name/Makefile"
+            run_logged sed -i 's/CONFIG_PLATFORM_ARM64_RPI = n/CONFIG_PLATFORM_ARM64_RPI = y/g' "/usr/src/$dir_name/Makefile"
+            run_logged sed -i 's/^MAKE="\(ARCH=[^ ]* \)*/MAKE="ARCH=arm64 /' "/usr/src/$dir_name/dkms.conf"
+            ;;
+        armhf|armel|armv7l)
+            run_logged sed -i 's/CONFIG_PLATFORM_I386_PC = y/CONFIG_PLATFORM_I386_PC = n/g' "/usr/src/$dir_name/Makefile"
+            run_logged sed -i 's/CONFIG_PLATFORM_ARM_RPI = n/CONFIG_PLATFORM_ARM_RPI = y/g' "/usr/src/$dir_name/Makefile"
+            run_logged sed -i 's/^MAKE="\(ARCH=[^ ]* \)*/MAKE="ARCH=arm /' "/usr/src/$dir_name/dkms.conf"
+            ;;
+    esac
+
+    remove_dkms_module_versions 8812au
+    if run_shell_logged_timeout "$DRIVER_TIMEOUT_SECONDS" "cd /usr/src/$dir_name && make dkms_install"; then
+        cat >/etc/modprobe.d/ghostlink-rtl8812au.conf <<'CONF'
+# Prefer aircrack-ng 88XXau for RTL8812AU monitor mode/frame injection.
+blacklist rtw_8812au
+blacklist rtw88_8812au
+options 88XXau rtw_led_ctrl=0
+CONF
+        module_available 88XXau || {
+            log "[-] aircrack-ng RTL8812AU install completed, but module 88XXau is not available."
+            return 1
+        }
+        log "[+] RTL8812AU pentest driver installed as module 88XXau."
+        return 0
+    fi
+
+    log "[!] aircrack-ng RTL8812AU build failed or timed out. Falling back to rtw88 for kernel-compatible RTL8812AU support."
+    remove_dkms_module_versions 8812au
+    return 1
+}
+
 install_rtw88_driver() {
     local dir_name="rtw88"
     local repo_url="https://github.com/lwfinger/rtw88.git"
     local release dkms_name dkms_version
     release="$(uname -r)"
 
-    if modinfo rtw_8812au >/dev/null 2>&1 && modinfo rtw_8822bu >/dev/null 2>&1; then
-        log "[+] Driver rtw88 already provides RTL8812AU (rtw_8812au) and RTL88x2BU (rtw_8822bu)."
+    if rtl88x2bu_ready && rtl8812au_ready; then
+        log "[+] Driver rtw88/fallback modules are already available for RTL88x2BU and RTL8812AU."
         return
     fi
 
     if ! kernel_headers_available; then
-        log "[-] Kernel headers for $release are missing; cannot build required rtw88 driver."
+        log "[-] Kernel headers for $release are missing; cannot build required RTL88x2BU rtw88 driver."
         return 1
     fi
 
-    log "[+] Installing RTL8812AU/RTL88x2BU via lwfinger/rtw88..."
+    log "[+] Installing RTL88x2BU via lwfinger/rtw88..."
     mkdir -p /usr/src
 
     if [ -d "/usr/src/$dir_name/.git" ]; then
-        run_logged git -C "/usr/src/$dir_name" pull --ff-only || return 1
+        run_logged_timeout 300 git -C "/usr/src/$dir_name" pull --ff-only || return 1
     elif [ -e "/usr/src/$dir_name" ]; then
         log "[-] /usr/src/$dir_name exists but is not a git checkout. Move it aside and rerun setup."
         return 1
     else
-        run_logged git clone "$repo_url" "/usr/src/$dir_name" || return 1
+        run_logged_timeout 600 git clone "$repo_url" "/usr/src/$dir_name" || return 1
     fi
 
     dkms_name="$(awk -F= '/^PACKAGE_NAME=/ {gsub(/"/, "", $2); print $2; exit}' "/usr/src/$dir_name/dkms.conf")"
@@ -299,57 +423,20 @@ install_rtw88_driver() {
     if dkms status "$dkms_name/$dkms_version" -k "$release" 2>/dev/null | grep -q "installed"; then
         log "[+] DKMS module $dkms_name/$dkms_version is already installed for $release."
     else
-        (cd "/usr/src/$dir_name" && dkms install "$PWD") >>"$SETUP_LOG" 2>&1 || return 1
+        run_shell_logged_timeout "$DRIVER_TIMEOUT_SECONDS" "cd /usr/src/$dir_name && dkms install \"\$PWD\"" || return 1
     fi
 
-    (cd "/usr/src/$dir_name" && make install_fw) >>"$SETUP_LOG" 2>&1 || return 1
+    run_shell_logged_timeout 300 "cd /usr/src/$dir_name && make install_fw" || return 1
     install -m 0644 "/usr/src/$dir_name/rtw88.conf" /etc/modprobe.d/rtw88.conf || return 1
 
-    modinfo rtw_8812au >/dev/null 2>&1 || {
-        log "[-] rtw88 install completed, but module rtw_8812au is not available."
+    rtl88x2bu_ready || {
+        log "[-] rtw88 install completed, but RTL88x2BU module is not available."
         return 1
     }
-    modinfo rtw_8822bu >/dev/null 2>&1 || {
-        log "[-] rtw88 install completed, but module rtw_8822bu is not available."
+    rtl8812au_ready || {
+        log "[-] rtw88 install completed, but no RTL8812AU module is available."
         return 1
     }
-}
-
-install_driver() {
-    local name="$1"
-    local repo_url="$2"
-    local dir_name="$3"
-    local check_module="$4"
-    local install_script="${5:-install-driver.sh}"
-
-    if lsmod | grep -q "^$check_module" || modinfo "$check_module" >/dev/null 2>&1; then
-        log "[+] Driver $name ($check_module) already installed."
-        return
-    fi
-
-    if ! kernel_headers_available; then
-        log "[-] Kernel headers for $(uname -r) are missing; cannot build required driver $name."
-        return 1
-    fi
-
-    log "[+] Installing $name..."
-    mkdir -p /usr/src
-
-    if [ -d "/usr/src/$dir_name/.git" ]; then
-        run_logged git -C "/usr/src/$dir_name" pull --ff-only || return 1
-    elif [ -e "/usr/src/$dir_name" ]; then
-        log "[-] /usr/src/$dir_name exists but is not a git checkout. Move it aside and rerun setup."
-        return 1
-    else
-        run_logged git clone "$repo_url" "/usr/src/$dir_name" || return 1
-    fi
-
-    if [ -x "/usr/src/$dir_name/$install_script" ]; then
-        (cd "/usr/src/$dir_name" && ./"$install_script") >>"$SETUP_LOG" 2>&1 || return 1
-    else
-        log "[-] Missing executable installer /usr/src/$dir_name/$install_script"
-        return 1
-    fi
 }
 
 install_rtl8188eus() {
@@ -416,7 +503,9 @@ configure_management_wifi || log "[!] Management Wi-Fi configuration was skipped
 echo ""
 log "--- Driver Installation ---"
 log "Build/install output is logged to $SETUP_LOG"
-install_rtw88_driver || { log "[-] Required rtw88 driver install failed. See $SETUP_LOG"; exit 1; }
+remove_dkms_module_versions rtl88x2bu
+install_rtl8812au_pentest_driver || log "[!] RTL8812AU pentest driver failed; rtw88 fallback will be used if available."
+install_rtw88_driver || { log "[-] Required RTL88x2BU rtw88 driver install failed. See $SETUP_LOG"; exit 1; }
 install_rtl8188eus || log "[!] Optional backup driver RTL8188EUS failed. Continuing; see $SETUP_LOG"
 
 echo ""

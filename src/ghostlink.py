@@ -1,11 +1,10 @@
 #!/usr/bin/env python3
-import sys
 import argparse
 import time
 import shlex
 from core.database import (
-    get_db_stats, get_networks, get_credentials, get_pentests,
-    save_scan_result, save_pentest_job, save_credential, update_connection_status, update_ap_status
+    get_db_stats, get_credentials, save_scan_result, save_pentest_job,
+    save_credential, update_connection_status
 )
 from core.network import (
     detect_adapters, get_management_ip, scan_networks, connect_network,
@@ -16,9 +15,14 @@ from core.pentest import start_pentest
 from core.updater import update_ghostlink
 
 def print_banner():
-    print("="*40)
-    print("             GHOSTLINK-MINI")
-    print("="*40)
+    print(r"""
+   ________               __  ___      __
+  / ____/ /_  ____  _____/ /_/ (_)____/ /__
+ / / __/ __ \/ __ \/ ___/ __/ / / ___/ //_/
+/ /_/ / / / / /_/ (__  ) /_/ / / /__/ ,<
+\____/_/ /_/\____/____/\__/_/_/\___/_/|_|
+        ghostlink-mini :: signal ops
+""")
 
 def print_status_overview():
     adapters = detect_adapters()
@@ -274,6 +278,11 @@ def cmd_diag():
     for tool in ['wifite', 'airgeddon', 'aircrack-ng', 'hostapd', 'dnsmasq', 'iw', 'nmcli']:
         out, code = run_cmd_no_check(f"which {tool}")
         print(f"- {tool}: {'Installed' if code == 0 else 'Missing'}")
+
+    print("\nDriver Modules:")
+    for module in ['88XXau', 'rtw_8812au', 'rtw_8822bu', 'rtw88_8822bu', '8188eu']:
+        _, code = run_cmd_no_check(f"modinfo {shlex.quote(module)}")
+        print(f"- {module}: {'Available' if code == 0 else 'Missing'}")
         
     print("\nInternet Routing:")
     print(f"- Ping 8.8.8.8: {'Success' if check_internet() else 'Failed'}")
