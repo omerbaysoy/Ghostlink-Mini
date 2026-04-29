@@ -1,0 +1,387 @@
+#!/usr/bin/env python3
+import sys
+import argparse
+import time
+from core.database import (
+    get_db_stats, get_networks, get_credentials, get_pentests,
+    save_scan_result, save_pentest_job, save_credential, update_connection_status, update_ap_status
+)
+from core.network import (
+    detect_adapters, get_management_ip, scan_networks, connect_network,
+    check_internet, start_ap, stop_ap, restart_networking, run_cmd, run_cmd_no_check
+)
+from core.pentest import start_pentest
+from core.updater import update_ghostlink
+
+def print_banner():
+    print("="*40)
+    print("             GHOSTLINK-MINI")
+    print("="*40)
+
+def print_status_overview():
+    adapters = detect_adapters()
+    mgmt_iface = adapters.get("management")
+    rtl8812au_iface = adapters.get("rtl8812au")
+    rtl88x2bu_iface = adapters.get("rtl88x2bu")
+    rtl8188eus_iface = adapters.get("rtl8188eus")
+    
+    mgmt_ip = get_management_ip(mgmt_iface) if mgmt_iface else "Not found"
+    # Get current mgmt SSID
+    mgmt_ssid = "Unknown"
+    if mgmt_iface:
+        out, code = run_cmd_no_check(f"iw dev {mgmt_iface} link | grep SSID | awk '{{print $2}}'")
+        if code == 0 and out:
+            mgmt_ssid = out
+            
+    # Check internet via RTL8812AU (or generally)
+    internet_status = "Connected" if check_internet() else "Disconnected"
+    
+    # Check AP status
+    ap_status = "Inactive"
+    out, code = run_cmd_no_check("systemctl is-active hostapd")
+    if code == 0 and out.strip() == "active":
+        ap_status = "Active"
+
+    print(f"\n[+] Management Network: {mgmt_ssid}")
+    print(f"[+] Management Interface: {mgmt_iface}")
+    print(f"[+] Management IP: {mgmt_ip}")
+    print(f"[-] RTL8812AU Status: {rtl8812au_iface if rtl8812au_iface else 'Missing'}")
+    print(f"[-] RTL88x2BU Status: {rtl88x2bu_iface if rtl88x2bu_iface else 'Missing'}")
+    if rtl8188eus_iface:
+        print(f"[-] RTL8188EUS Status: {rtl8188eus_iface}")
+    print(f"[-] Ghostlink-AP Status: {ap_status}")
+    print(f"[-] Internet Uplink: {internet_status}\n")
+    return adapters
+
+def cmd_status():
+    print_banner()
+    adapters = print_status_overview()
+    print("--- Detailed Status ---")
+    out, _ = run_cmd_no_check("systemctl is-active dnsmasq")
+    dnsmasq_status = out.strip()
+    print(f"DHCP/NAT Status: {'Active' if dnsmasq_status == 'active' else 'Inactive'}")
+    creds = get_credentials()
+    if creds:
+        latest = creds[0]
+        print(f"Latest Credential: {latest['ssid']} (BSSID: {latest['bssid']}) - Password: [HIDDEN]")
+    else:
+        print("Latest Credential: None")
+
+def cmd_db():
+    stats = get_db_stats()
+    print("\n--- Database Status ---")
+    print(f"Database Health: {stats['health']}")
+    print(f"Total Saved Credentials: {stats['total_creds']}")
+    print(f"Total Scan Records: {stats['total_networks']}")
+    print(f"Total Pentest Jobs: {stats['total_pentests']}")
+    print("\nLatest Pentest Jobs:")
+    for job in stats['latest_pentests']:
+        print(f"- {job['timestamp']} | Target: {job['target_ssid']} | Tool: {job['tool_used']} | Status: {job['result_status']}")
+
+def cmd_creds():
+    creds = get_credentials()
+    if not creds:
+        print("No saved credentials.")
+        return
+    print("\n--- Saved Credentials ---")
+    for i, cred in enumerate(creds):
+        print(f"{i+1}. {cred['ssid']} | BSSID: {cred['bssid']} | Adapter: {cred['adapter']} | Timestamp: {cred['timestamp']}")
+        print(f"   Conn Status: {cred['connection_status']} | AP Status: {cred['ap_status']}")
+    
+    choice = input("\nEnter credential number to reveal password (or press Enter to exit): ")
+    if choice.isdigit():
+        idx = int(choice) - 1
+        if 0 <= idx < len(creds):
+            confirm = input(f"Are you sure you want to reveal the password for {creds[idx]['ssid']}? (y/n): ")
+            if confirm.lower() == 'y':
+                print(f"Password: {creds[idx]['password']}")
+            else:
+                print("Cancelled.")
+
+def cmd_scan(iface=None):
+    adapters = detect_adapters()
+    if not iface:
+        iface = adapters.get("rtl8812au") or adapters.get("rtl8188eus")
+    
+    if not iface:
+        print("Error: No suitable adapter found for scanning.")
+        return
+
+    if iface == adapters.get("management"):
+        print(f"Error: Interface {iface} is configured for management. Scanning is blocked on this interface.")
+        return
+
+    print(f"Scanning on interface {iface}...")
+    networks = scan_networks(iface)
+    
+    if not networks:
+        print("No networks found.")
+        return
+        
+    print(f"\nFound {len(networks)} networks:")
+    print(f"{'SSID':<25} {'BSSID':<20} {'CH':<4} {'SIG':<4} {'ENC'}")
+    print("-" * 65)
+    for n in networks:
+        print(f"{n['ssid']:<25} {n['bssid']:<20} {n['channel']:<4} {n['signal']:<4} {n['encryption']}")
+        save_scan_result(n['ssid'], n['bssid'], n['channel'], n['signal'], n['encryption'], n['interface'])
+    print("\nResults saved to database.")
+
+def cmd_pentest(ssid, iface=None, bssid=None):
+    adapters = detect_adapters()
+    if not iface:
+        iface = adapters.get("rtl8812au") or adapters.get("rtl8188eus")
+        
+    if not iface:
+        print("Error: No suitable adapter found for pentest.")
+        return
+        
+    if iface == adapters.get("management"):
+        print(f"Error: Interface {iface} is configured for management. Pentesting is blocked on this interface.")
+        return
+        
+    print(f"Preparing to attack '{ssid}' using {iface}...")
+    confirm = input("This tool is for authorized/lab use only. Confirm target is authorized? (y/n): ")
+    if confirm.lower() != 'y':
+        print("Aborted.")
+        return
+        
+    print("Launching Wifite (this may take a while)...")
+    result = start_pentest(iface, ssid, bssid)
+    
+    if result["status"] == "success":
+        print(f"\n[+] SUCCESS: Recovered key for {ssid}")
+        # Save to DB
+        pentest_id = save_pentest_job(ssid, result.get("bssid", bssid), iface, "wifite", "success", result.get("log_path", ""))
+        save_credential(pentest_id, ssid, result.get("bssid", bssid), result["password"], iface)
+        print("Credentials saved to database.")
+        
+        # Post-success flow
+        conn = input(f"Do you want to connect RTL8812AU to '{ssid}' now? (y/n): ")
+        if conn.lower() == 'y':
+            do_connect(ssid, result["password"])
+            ap = input("Do you want to start Ghostlink-AP now? (y/n): ")
+            if ap.lower() == 'y':
+                cmd_ap_start()
+    else:
+        print(f"\n[-] FAILED: {result.get('message')}")
+        print(f"Log saved to: {result.get('log_path')}")
+        save_pentest_job(ssid, bssid, iface, "wifite", "failed", result.get("log_path", ""))
+
+def do_connect(ssid, password):
+    adapters = detect_adapters()
+    iface = adapters.get("rtl8812au")
+    if not iface:
+        print("Error: RTL8812AU is not connected or detected.")
+        return
+    
+    print(f"Connecting {iface} to {ssid}...")
+    success = connect_network(iface, ssid, password)
+    if success:
+        print("Connection command sent. Checking internet...")
+        time.sleep(5)
+        if check_internet():
+            print("[+] Connected and internet is reachable.")
+        else:
+            print("[-] Connected, but internet is NOT reachable.")
+    else:
+        print("[-] Failed to connect.")
+
+def cmd_connect():
+    creds = get_credentials()
+    if not creds:
+        print("No saved credentials.")
+        return
+    print("\n--- Select Network to Connect ---")
+    for i, cred in enumerate(creds):
+        print(f"{i+1}. {cred['ssid']}")
+    
+    choice = input("\nEnter number (or press Enter to exit): ")
+    if choice.isdigit():
+        idx = int(choice) - 1
+        if 0 <= idx < len(creds):
+            do_connect(creds[idx]['ssid'], creds[idx]['password'])
+            update_connection_status(creds[idx]['id'], 'Connected')
+
+def cmd_ap_start():
+    adapters = detect_adapters()
+    ap_iface = adapters.get("rtl88x2bu")
+    uplink_iface = adapters.get("rtl8812au")
+    
+    if not ap_iface:
+        print("Error: RTL88x2BU adapter not detected for AP.")
+        return
+    if not uplink_iface:
+        print("Error: RTL8812AU uplink adapter not detected.")
+        return
+        
+    print(f"Starting Ghostlink-AP on {ap_iface} shared via {uplink_iface}...")
+    start_ap(ap_iface, uplink_iface)
+    
+    print("Checking services...")
+    time.sleep(2)
+    h_out, _ = run_cmd_no_check("systemctl is-active hostapd || killall -0 hostapd && echo 'active'")
+    d_out, _ = run_cmd_no_check("systemctl is-active dnsmasq || killall -0 dnsmasq && echo 'active'")
+    
+    if 'active' in h_out and 'active' in d_out:
+        print("[+] Ghostlink-AP is running (SSID: Ghostlink-AP, Password: Ghostlink123*)")
+    else:
+        print("[-] Failed to start AP services. Run 'ghostlink -diag' for more info.")
+
+def cmd_ap_stop():
+    adapters = detect_adapters()
+    ap_iface = adapters.get("rtl88x2bu")
+    uplink_iface = adapters.get("rtl8812au")
+    if not ap_iface or not uplink_iface:
+        print("Cannot determine interfaces to stop AP. Applying generic stop...")
+        run_cmd_no_check("killall hostapd dnsmasq")
+    else:
+        stop_ap(ap_iface, uplink_iface)
+    print("Ghostlink-AP stopped.")
+
+def cmd_diag():
+    print("\n--- Diagnostics ---")
+    out, _ = run_cmd_no_check("cat /etc/os-release | grep PRETTY_NAME | cut -d= -f2")
+    print(f"OS Version: {out}")
+    out, _ = run_cmd_no_check("uname -r")
+    print(f"Kernel Version: {out}")
+    
+    adapters = detect_adapters()
+    print(f"\nAdapter Map:")
+    for role, iface in adapters.items():
+        print(f"- {role}: {iface if iface else 'Missing'}")
+        if iface:
+            out, _ = run_cmd_no_check(f"iw dev {iface} info | grep monitor")
+            support = "Yes" if out else "Unknown"
+            print(f"  Monitor mode support: {support}")
+            
+    print("\nDependencies:")
+    for tool in ['wifite', 'airgeddon', 'aircrack-ng', 'hostapd', 'dnsmasq', 'iw', 'nmcli']:
+        out, code = run_cmd_no_check(f"which {tool}")
+        print(f"- {tool}: {'Installed' if code == 0 else 'Missing'}")
+        
+    print("\nInternet Routing:")
+    print(f"- Ping 8.8.8.8: {'Success' if check_internet() else 'Failed'}")
+    
+    print("\nDatabase Health:")
+    print(f"- Path: /var/lib/ghostlink/ghostlink.db")
+    stats = get_db_stats()
+    print(f"- Status: {stats['health']}")
+    
+def cmd_restart_net():
+    print("Restarting networking services...")
+    restart_networking()
+    print("Restart command sent.")
+
+def cmd_update():
+    print("Updating Ghostlink-Mini...")
+    res = update_ghostlink()
+    if res['status'] == 'success':
+        print("[+] Update successful.")
+    else:
+        print(f"[-] Update failed: {res['message']}")
+        if 'log' in res:
+            print(f"Log: {res['log']}")
+
+def interactive_menu():
+    while True:
+        print_banner()
+        print_status_overview()
+        
+        print("1. Status")
+        print("2. Scan Wi-Fi networks")
+        print("3. Start pentest with RTL8812AU")
+        print("4. Show saved credentials")
+        print("5. Connect RTL8812AU to saved network")
+        print("6. Start Ghostlink-AP on RTL88x2BU")
+        print("7. Stop Ghostlink-AP")
+        print("8. Restart networking services")
+        print("9. Run diagnostics")
+        print("10. Update Ghostlink-Mini")
+        print("11. Exit")
+        
+        choice = input("\nSelect option: ")
+        
+        if choice == '1':
+            cmd_status()
+        elif choice == '2':
+            cmd_scan()
+        elif choice == '3':
+            ssid = input("Target SSID: ")
+            if ssid:
+                cmd_pentest(ssid)
+        elif choice == '4':
+            cmd_creds()
+        elif choice == '5':
+            cmd_connect()
+        elif choice == '6':
+            cmd_ap_start()
+        elif choice == '7':
+            cmd_ap_stop()
+        elif choice == '8':
+            cmd_restart_net()
+        elif choice == '9':
+            cmd_diag()
+        elif choice == '10':
+            cmd_update()
+        elif choice == '11':
+            break
+        else:
+            print("Invalid option.")
+            
+        input("\nPress Enter to continue...")
+
+def main():
+    parser = argparse.ArgumentParser(description="Ghostlink-Mini")
+    parser.add_argument('-status', action='store_true', help="Show status")
+    parser.add_argument('-db', action='store_true', help="Show database status")
+    parser.add_argument('-creds', action='store_true', help="Show saved credentials")
+    parser.add_argument('-connect', action='store_true', help="Connect to saved network")
+    parser.add_argument('-ap-start', action='store_true', help="Start AP")
+    parser.add_argument('-ap-stop', action='store_true', help="Stop AP")
+    parser.add_argument('-diag', action='store_true', help="Run diagnostics")
+    parser.add_argument('-restart-net', action='store_true', help="Restart networking")
+    parser.add_argument('-update', action='store_true', help="Update tool")
+    
+    subparsers = parser.add_subparsers(dest='command')
+    
+    # scan command
+    scan_parser = subparsers.add_parser('scan', help='Scan networks')
+    scan_parser.add_argument('--iface', help='Interface to use')
+    
+    # pentest command
+    pentest_parser = subparsers.add_parser('pentest', help='Start pentest')
+    pentest_parser.add_argument('--iface', help='Interface to use')
+    pentest_parser.add_argument('--ssid', required=True, help='Target SSID')
+    pentest_parser.add_argument('--bssid', help='Target BSSID')
+    
+    args = parser.parse_args()
+    
+    # Handle direct commands
+    if args.status:
+        cmd_status()
+    elif args.db:
+        cmd_db()
+    elif args.creds:
+        cmd_creds()
+    elif args.connect:
+        cmd_connect()
+    elif args.ap_start:
+        cmd_ap_start()
+    elif args.ap_stop:
+        cmd_ap_stop()
+    elif args.diag:
+        cmd_diag()
+    elif args.restart_net:
+        cmd_restart_net()
+    elif args.update:
+        cmd_update()
+    elif args.command == 'scan':
+        cmd_scan(args.iface)
+    elif args.command == 'pentest':
+        cmd_pentest(args.ssid, args.iface, args.bssid)
+    else:
+        # No args, show interactive menu
+        interactive_menu()
+
+if __name__ == '__main__':
+    main()
