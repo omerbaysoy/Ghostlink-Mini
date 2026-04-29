@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 import argparse
+import os
 import time
 import shlex
 from core.database import (
@@ -9,9 +10,10 @@ from core.database import (
 from core.network import (
     detect_adapters, get_management_ip, scan_networks, connect_network,
     check_internet, start_ap, stop_ap, restart_networking, run_cmd_no_check,
-    is_ghostlink_ap_running, interface_exists, get_connected_ssid
+    is_ghostlink_ap_running, interface_exists, get_connected_ssid,
+    is_wireless_interface, get_driver
 )
-from core.pentest import start_pentest
+from core.pentest import start_pentest, check_monitor_mode
 from core.updater import update_ghostlink
 
 def print_banner():
@@ -48,8 +50,7 @@ def print_status_overview():
     print(f"[+] Management IP: {mgmt_ip}")
     print(f"[-] RTL8812AU Status: {rtl8812au_iface if rtl8812au_iface else 'Missing'}")
     print(f"[-] RTL88x2BU Status: {rtl88x2bu_iface if rtl88x2bu_iface else 'Missing'}")
-    if rtl8188eus_iface:
-        print(f"[-] RTL8188EUS Status: {rtl8188eus_iface}")
+    print(f"[-] RTL8188EUS Status: {rtl8188eus_iface if rtl8188eus_iface else 'Missing'}")
     print(f"[-] Ghostlink-AP Status: {ap_status}")
     print(f"[-] Internet Uplink: {internet_status}\n")
     return adapters
@@ -111,6 +112,9 @@ def cmd_scan(iface=None):
     if not interface_exists(iface):
         print(f"Error: Interface {iface} does not exist.")
         return
+    if not is_wireless_interface(iface):
+        print(f"Error: Interface {iface} is not a wireless interface.")
+        return
 
     if iface == adapters.get("management"):
         print(f"Error: Interface {iface} is configured for management. Scanning is blocked on this interface.")
@@ -146,9 +150,15 @@ def cmd_pentest(ssid, iface=None, bssid=None):
     if not interface_exists(iface):
         print(f"Error: Interface {iface} does not exist.")
         return
+    if not is_wireless_interface(iface):
+        print(f"Error: Interface {iface} is not a wireless interface.")
+        return
         
     if iface == adapters.get("management"):
         print(f"Error: Interface {iface} is configured for management. Pentesting is blocked on this interface.")
+        return
+    if os.geteuid() != 0:
+        print("Error: Pentesting requires root. Run with sudo.")
         return
         
     print(f"Preparing to attack '{ssid}' using {iface}...")
@@ -270,8 +280,8 @@ def cmd_diag():
     for role, iface in adapters.items():
         print(f"- {role}: {iface if iface else 'Missing'}")
         if iface:
-            out, _ = run_cmd_no_check(f"iw dev {shlex.quote(iface)} info | grep monitor")
-            support = "Yes" if out else "Unknown"
+            print(f"  Driver: {get_driver(iface)}")
+            support = "Yes" if check_monitor_mode(iface) else "No"
             print(f"  Monitor mode support: {support}")
             
     print("\nDependencies:")
@@ -280,7 +290,7 @@ def cmd_diag():
         print(f"- {tool}: {'Installed' if code == 0 else 'Missing'}")
 
     print("\nDriver Modules:")
-    for module in ['88XXau', 'rtw_8812au', 'rtw_8822bu', 'rtw88_8822bu', '8188eu']:
+    for module in ['88XXau', 'rtw_8812au', 'rtw88_8812au', 'rtw_8822bu', 'rtw88_8822bu', '8188eu', 'rtl8xxxu']:
         _, code = run_cmd_no_check(f"modinfo {shlex.quote(module)}")
         print(f"- {module}: {'Available' if code == 0 else 'Missing'}")
         

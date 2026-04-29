@@ -3,7 +3,7 @@ import os
 import time
 import json
 import shlex
-from .config import load_adapter_map, save_adapter_map
+from .config import GHOSTLINK_LOG_DIR, load_adapter_map, save_adapter_map
 
 RUNTIME_DIR = "/run/ghostlink"
 HOSTAPD_CONF = os.path.join(RUNTIME_DIR, "hostapd.conf")
@@ -11,6 +11,7 @@ DNSMASQ_CONF = os.path.join(RUNTIME_DIR, "dnsmasq.conf")
 HOSTAPD_PID = os.path.join(RUNTIME_DIR, "hostapd.pid")
 DNSMASQ_PID = os.path.join(RUNTIME_DIR, "dnsmasq.pid")
 AP_STATE = os.path.join(RUNTIME_DIR, "ap_state.json")
+AP_LOG = os.path.join(GHOSTLINK_LOG_DIR, "ap.log")
 IPTABLES_COMMENT = "ghostlink-mini"
 
 def run_cmd(cmd):
@@ -22,7 +23,10 @@ def run_cmd(cmd):
 
 def run_cmd_no_check(cmd):
     result = subprocess.run(cmd, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
-    return result.stdout.strip(), result.returncode
+    stdout = result.stdout.strip()
+    stderr = result.stderr.strip()
+    output = "\n".join(part for part in [stdout, stderr] if part)
+    return output, result.returncode
 
 def get_interfaces():
     out, code = run_cmd_no_check("iw dev")
@@ -35,11 +39,38 @@ def interface_exists(iface):
         return False
     return os.path.exists(f"/sys/class/net/{os.path.basename(iface)}")
 
+def is_wireless_interface(iface):
+    if not interface_exists(iface):
+        return False
+    safe_iface = os.path.basename(iface)
+    return safe_iface in get_interfaces() or os.path.exists(f"/sys/class/net/{safe_iface}/wireless")
+
 def get_driver(iface):
     safe_iface = os.path.basename(iface)
     path = f"/sys/class/net/{safe_iface}/device/driver"
     target = os.path.realpath(path) if os.path.exists(path) else ""
     return os.path.basename(target) if target else "Unknown"
+
+def get_modalias(iface):
+    safe_iface = os.path.basename(iface)
+    path = f"/sys/class/net/{safe_iface}/device/modalias"
+    try:
+        with open(path, "r") as f:
+            return f.read().strip()
+    except OSError:
+        return ""
+
+def get_default_route_iface():
+    for cmd in ["ip route get 1.1.1.1", "ip route show default"]:
+        out, code = run_cmd_no_check(cmd)
+        if code != 0 or not out:
+            continue
+        parts = out.split()
+        if "dev" in parts:
+            idx = parts.index("dev") + 1
+            if idx < len(parts):
+                return parts[idx]
+    return None
 
 def get_connected_ssid(iface):
     if not interface_exists(iface):
@@ -75,21 +106,27 @@ def detect_adapters():
     
     saved_map = load_adapter_map()
     saved_management = saved_map.get("management")
-    if saved_management in ifaces:
+    if saved_management and interface_exists(saved_management):
         adapters["management"] = saved_management
+
+    default_iface = get_default_route_iface()
+    if default_iface and interface_exists(default_iface):
+        adapters["management"] = default_iface
     
     for iface in ifaces:
-        if iface == adapters["management"]:
-            continue
         driver = get_driver(iface)
+        modalias = get_modalias(iface).lower()
         if driver in ["8812au", "88XXau", "rtw_8812au", "rtw88_8812au"]:
             adapters["rtl8812au"] = iface
         elif driver in ["88x2bu", "rtw_8822bu", "rtw88_8822bu"]:
             adapters["rtl88x2bu"] = iface
-        elif driver in ["r8188eu", "8188eu"]:
+        elif driver in ["r8188eu", "8188eu"] or (
+            driver == "rtl8xxxu" and any(chip in modalias for chip in ["v2357p010c", "v0bdap8179"])
+        ):
             adapters["rtl8188eus"] = iface
         elif driver in ["brcmfmac", "brcmsmac"]: # Onboard pi wifi usually uses broadcom
-            adapters["management"] = iface
+            if not adapters["management"]:
+                adapters["management"] = iface
 
     if not adapters["management"]:
         for iface in _nm_active_wifi_interfaces():
@@ -129,6 +166,8 @@ def _split_nmcli_line(line):
 def scan_networks(iface):
     if not interface_exists(iface):
         return []
+    if not is_wireless_interface(iface):
+        return []
     
     run_cmd(f"ip link set {shlex.quote(iface)} up")
     
@@ -159,6 +198,8 @@ def scan_networks(iface):
 def connect_network(iface, ssid, password):
     if not interface_exists(iface):
         return False
+    if not is_wireless_interface(iface):
+        return False
 
     run_cmd(f"nmcli device disconnect {shlex.quote(iface)}")
 
@@ -185,6 +226,17 @@ def require_root(action):
 
 def _ensure_runtime_dir():
     os.makedirs(RUNTIME_DIR, exist_ok=True)
+
+def _write_ap_log(label, output):
+    try:
+        os.makedirs(GHOSTLINK_LOG_DIR, exist_ok=True)
+        with open(AP_LOG, "a") as f:
+            f.write(f"\n--- {label} ---\n")
+            if output:
+                f.write(output)
+                f.write("\n")
+    except OSError:
+        pass
 
 def _pid_matches(pid_path, expected):
     try:
@@ -258,6 +310,9 @@ def start_ap(ap_iface, uplink_iface):
     
     dnsmasq_conf = f"""
 interface={ap_iface}
+bind-interfaces
+port=0
+dhcp-authoritative
 dhcp-range=10.0.0.10,10.0.0.100,255.255.255.0,24h
 dhcp-option=option:router,10.0.0.1
 dhcp-option=option:dns-server,8.8.8.8,8.8.4.4
@@ -290,13 +345,29 @@ rsn_pairwise=CCMP
     with open(AP_STATE, "w") as f:
         json.dump({"ap_iface": ap_iface, "uplink_iface": uplink_iface}, f)
 
-    run_cmd(
+    dnsmasq_out, dnsmasq_code = run_cmd_no_check(
         "dnsmasq "
         f"--conf-file={shlex.quote(DNSMASQ_CONF)} "
         f"--pid-file={shlex.quote(DNSMASQ_PID)}"
     )
+    _write_ap_log("dnsmasq", dnsmasq_out)
     time.sleep(1)
-    run_cmd(f"hostapd -B -P {shlex.quote(HOSTAPD_PID)} {shlex.quote(HOSTAPD_CONF)}")
+    _, dnsmasq_ok = _pid_matches(DNSMASQ_PID, DNSMASQ_CONF)
+    if dnsmasq_code != 0 or not dnsmasq_ok:
+        print(f"Error: dnsmasq failed to start. See {AP_LOG}")
+        stop_ap(ap_iface, uplink_iface)
+        return False
+
+    hostapd_out, hostapd_code = run_cmd_no_check(
+        f"hostapd -B -P {shlex.quote(HOSTAPD_PID)} {shlex.quote(HOSTAPD_CONF)}"
+    )
+    _write_ap_log("hostapd", hostapd_out)
+    time.sleep(1)
+    _, hostapd_ok = _pid_matches(HOSTAPD_PID, HOSTAPD_CONF)
+    if hostapd_code != 0 or not hostapd_ok:
+        print(f"Error: hostapd failed to start. See {AP_LOG}")
+        stop_ap(ap_iface, uplink_iface)
+        return False
     
     return True
 
