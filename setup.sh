@@ -252,6 +252,49 @@ install_kernel_headers() {
     return 1
 }
 
+install_rtw88_driver() {
+    local dir_name="rtw88"
+    local repo_url="https://github.com/lwfinger/rtw88.git"
+    local release
+    release="$(uname -r)"
+
+    if lsmod | grep -q "^rtw_8812au" || modinfo rtw_8812au >/dev/null 2>&1; then
+        log "[+] Driver RTL8812AU (rtw_8812au) already installed."
+        return
+    fi
+
+    if ! kernel_headers_available; then
+        log "[-] Kernel headers for $release are missing; cannot build required driver RTL8812AU."
+        return 1
+    fi
+
+    log "[+] Installing RTL8812AU via lwfinger/rtw88..."
+    mkdir -p /usr/src
+
+    if [ -d "/usr/src/$dir_name/.git" ]; then
+        run_logged git -C "/usr/src/$dir_name" pull --ff-only || return 1
+    elif [ -e "/usr/src/$dir_name" ]; then
+        log "[-] /usr/src/$dir_name exists but is not a git checkout. Move it aside and rerun setup."
+        return 1
+    else
+        run_logged git clone "$repo_url" "/usr/src/$dir_name" || return 1
+    fi
+
+    if dkms status rtw88/0.6 -k "$release" 2>/dev/null | grep -q "installed"; then
+        log "[+] DKMS module rtw88/0.6 is already installed for $release."
+    else
+        (cd "/usr/src/$dir_name" && dkms install "$PWD") >>"$SETUP_LOG" 2>&1 || return 1
+    fi
+
+    (cd "/usr/src/$dir_name" && make install_fw) >>"$SETUP_LOG" 2>&1 || return 1
+    install -m 0644 "/usr/src/$dir_name/rtw88.conf" /etc/modprobe.d/rtw88.conf || return 1
+
+    modinfo rtw_8812au >/dev/null 2>&1 || {
+        log "[-] rtw88 install completed, but module rtw_8812au is not available."
+        return 1
+    }
+}
+
 install_driver() {
     local name="$1"
     local repo_url="$2"
@@ -351,7 +394,7 @@ configure_management_wifi || log "[!] Management Wi-Fi configuration was skipped
 echo ""
 log "--- Driver Installation ---"
 log "Build/install output is logged to $SETUP_LOG"
-install_driver "RTL8812AU" "https://github.com/morrownr/8812au-20210820.git" "8812au" "8812au" || { log "[-] Required driver RTL8812AU failed. See $SETUP_LOG"; exit 1; }
+install_rtw88_driver || { log "[-] Required driver RTL8812AU failed. See $SETUP_LOG"; exit 1; }
 install_driver "RTL88x2BU" "https://github.com/morrownr/88x2bu-20210702.git" "88x2bu" "88x2bu" || { log "[-] Required driver RTL88x2BU failed. See $SETUP_LOG"; exit 1; }
 install_rtl8188eus || { log "[-] Required driver RTL8188EUS failed. See $SETUP_LOG"; exit 1; }
 
