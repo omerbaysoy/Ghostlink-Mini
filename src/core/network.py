@@ -45,6 +45,16 @@ def is_wireless_interface(iface):
     safe_iface = os.path.basename(iface)
     return safe_iface in get_interfaces() or os.path.exists(f"/sys/class/net/{safe_iface}/wireless")
 
+def get_operstate(iface):
+    if not interface_exists(iface):
+        return "missing"
+    safe_iface = os.path.basename(iface)
+    try:
+        with open(f"/sys/class/net/{safe_iface}/operstate", "r") as f:
+            return f.read().strip()
+    except OSError:
+        return "unknown"
+
 def get_driver(iface):
     safe_iface = os.path.basename(iface)
     path = f"/sys/class/net/{safe_iface}/device/driver"
@@ -169,7 +179,9 @@ def scan_networks(iface):
     if not is_wireless_interface(iface):
         return []
     
-    run_cmd(f"ip link set {shlex.quote(iface)} up")
+    _, up_code = run_cmd_no_check(f"ip link set {shlex.quote(iface)} up")
+    if up_code != 0 and get_operstate(iface) == "down":
+        return []
     
     out, code = run_cmd_no_check(f"nmcli -t -f SSID,BSSID,CHAN,SIGNAL,SECURITY dev wifi list ifname {shlex.quote(iface)} --rescan yes")
     networks = []

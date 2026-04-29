@@ -11,7 +11,7 @@ from core.network import (
     detect_adapters, get_management_ip, scan_networks, connect_network,
     check_internet, start_ap, stop_ap, restart_networking, run_cmd_no_check,
     is_ghostlink_ap_running, interface_exists, get_connected_ssid,
-    is_wireless_interface, get_driver
+    is_wireless_interface, get_driver, get_operstate
 )
 from core.pentest import start_pentest, check_monitor_mode
 from core.updater import update_ghostlink
@@ -103,25 +103,48 @@ def cmd_creds():
 
 def cmd_scan(iface=None):
     adapters = detect_adapters()
-    if not iface:
-        iface = adapters.get("rtl8812au") or adapters.get("rtl8188eus")
+    candidates = [iface] if iface else [
+        adapters.get("rtl8812au"),
+        adapters.get("rtl8188eus"),
+        adapters.get("rtl88x2bu"),
+    ]
+    candidates = [i for i in candidates if i]
     
-    if not iface:
+    if not candidates:
         print("Error: No suitable adapter found for scanning.")
         return
-    if not interface_exists(iface):
-        print(f"Error: Interface {iface} does not exist.")
-        return
-    if not is_wireless_interface(iface):
-        print(f"Error: Interface {iface} is not a wireless interface.")
-        return
 
-    if iface == adapters.get("management"):
-        print(f"Error: Interface {iface} is configured for management. Scanning is blocked on this interface.")
-        return
+    networks = []
+    seen_bssids = set()
+    attempted = []
+    for candidate in candidates:
+        if candidate in attempted:
+            continue
+        attempted.append(candidate)
+        if not interface_exists(candidate):
+            print(f"Warning: Interface {candidate} does not exist.")
+            continue
+        if not is_wireless_interface(candidate):
+            print(f"Warning: Interface {candidate} is not a wireless interface.")
+            continue
+        if candidate == adapters.get("management"):
+            print(f"Warning: Interface {candidate} is configured for management. Skipping scan on it.")
+            continue
+        if os.geteuid() != 0 and get_operstate(candidate) == "down":
+            print(f"Warning: Interface {candidate} is down. Run with sudo to let Ghostlink bring it up for scanning.")
+            continue
 
-    print(f"Scanning on interface {iface}...")
-    networks = scan_networks(iface)
+        print(f"Scanning on interface {candidate}...")
+        for network in scan_networks(candidate):
+            bssid = network.get("bssid")
+            if bssid and bssid in seen_bssids:
+                continue
+            if bssid:
+                seen_bssids.add(bssid)
+            networks.append(network)
+
+        if iface:
+            break
     
     if not networks:
         print("No networks found.")
@@ -142,7 +165,7 @@ def cmd_scan(iface=None):
 def cmd_pentest(ssid, iface=None, bssid=None):
     adapters = detect_adapters()
     if not iface:
-        iface = adapters.get("rtl8812au") or adapters.get("rtl8188eus")
+        iface = adapters.get("rtl8812au") or adapters.get("rtl8188eus") or adapters.get("rtl88x2bu")
         
     if not iface:
         print("Error: No suitable adapter found for pentest.")
@@ -160,6 +183,12 @@ def cmd_pentest(ssid, iface=None, bssid=None):
     if os.geteuid() != 0:
         print("Error: Pentesting requires root. Run with sudo.")
         return
+    if not check_monitor_mode(iface):
+        print(f"Error: Interface {iface} does not advertise monitor mode support.")
+        return
+    driver = get_driver(iface)
+    if driver.startswith("rtw"):
+        print(f"Warning: {iface} uses {driver}. Monitor mode is available, but injection/deauth quality depends on kernel driver support.")
         
     print(f"Preparing to attack '{ssid}' using {iface}...")
     confirm = input("This tool is for authorized/lab use only. Confirm target is authorized? (y/n): ")
