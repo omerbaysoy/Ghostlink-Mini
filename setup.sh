@@ -59,6 +59,14 @@ run_logged() {
     "$@" >>"$SETUP_LOG" 2>&1
 }
 
+set_runtime_permissions() {
+    local owner="${SUDO_USER:-root}"
+    if [ -n "$owner" ] && [ "$owner" != "root" ] && id "$owner" >/dev/null 2>&1; then
+        chown -R "$owner:$owner" /etc/ghostlink /var/lib/ghostlink /var/log/ghostlink
+    fi
+    chmod 750 /etc/ghostlink /var/lib/ghostlink /var/log/ghostlink
+}
+
 require_entrypoint() {
     local base_dir="$1"
     if [ ! -f "$base_dir/$SRC_ENTRY" ]; then
@@ -82,6 +90,7 @@ sync_project() {
     log "[+] Syncing project to $INSTALL_DIR..."
     if command -v rsync >/dev/null 2>&1; then
         run_logged rsync -a --delete \
+            --delete-excluded \
             --exclude '.pytest_cache/' \
             --exclude '__pycache__/' \
             "$source_dir/" "$INSTALL_DIR/"
@@ -91,6 +100,7 @@ sync_project() {
     fi
 
     require_entrypoint "$INSTALL_DIR"
+    find "$INSTALL_DIR" -type d -name "__pycache__" -prune -exec rm -rf {} +
 }
 
 install_launcher() {
@@ -103,6 +113,7 @@ install_launcher() {
     cat >"$tmp_launcher" <<'LAUNCHER'
 #!/bin/bash
 export PYTHONPATH=/opt/ghostlink-mini/src
+export PYTHONDONTWRITEBYTECODE=1
 exec python3 /opt/ghostlink-mini/src/ghostlink.py "$@"
 LAUNCHER
     install -m 0755 "$tmp_launcher" "$LAUNCHER"
@@ -255,20 +266,20 @@ install_kernel_headers() {
 install_rtw88_driver() {
     local dir_name="rtw88"
     local repo_url="https://github.com/lwfinger/rtw88.git"
-    local release
+    local release dkms_name dkms_version
     release="$(uname -r)"
 
-    if lsmod | grep -q "^rtw_8812au" || modinfo rtw_8812au >/dev/null 2>&1; then
-        log "[+] Driver RTL8812AU (rtw_8812au) already installed."
+    if modinfo rtw_8812au >/dev/null 2>&1 && modinfo rtw_8822bu >/dev/null 2>&1; then
+        log "[+] Driver rtw88 already provides RTL8812AU (rtw_8812au) and RTL88x2BU (rtw_8822bu)."
         return
     fi
 
     if ! kernel_headers_available; then
-        log "[-] Kernel headers for $release are missing; cannot build required driver RTL8812AU."
+        log "[-] Kernel headers for $release are missing; cannot build required rtw88 driver."
         return 1
     fi
 
-    log "[+] Installing RTL8812AU via lwfinger/rtw88..."
+    log "[+] Installing RTL8812AU/RTL88x2BU via lwfinger/rtw88..."
     mkdir -p /usr/src
 
     if [ -d "/usr/src/$dir_name/.git" ]; then
@@ -280,8 +291,13 @@ install_rtw88_driver() {
         run_logged git clone "$repo_url" "/usr/src/$dir_name" || return 1
     fi
 
-    if dkms status rtw88/0.6 -k "$release" 2>/dev/null | grep -q "installed"; then
-        log "[+] DKMS module rtw88/0.6 is already installed for $release."
+    dkms_name="$(awk -F= '/^PACKAGE_NAME=/ {gsub(/"/, "", $2); print $2; exit}' "/usr/src/$dir_name/dkms.conf")"
+    dkms_version="$(awk -F= '/^PACKAGE_VERSION=/ {gsub(/"/, "", $2); print $2; exit}' "/usr/src/$dir_name/dkms.conf")"
+    dkms_name="${dkms_name:-rtw88}"
+    dkms_version="${dkms_version:-0.6}"
+
+    if dkms status "$dkms_name/$dkms_version" -k "$release" 2>/dev/null | grep -q "installed"; then
+        log "[+] DKMS module $dkms_name/$dkms_version is already installed for $release."
     else
         (cd "/usr/src/$dir_name" && dkms install "$PWD") >>"$SETUP_LOG" 2>&1 || return 1
     fi
@@ -291,6 +307,10 @@ install_rtw88_driver() {
 
     modinfo rtw_8812au >/dev/null 2>&1 || {
         log "[-] rtw88 install completed, but module rtw_8812au is not available."
+        return 1
+    }
+    modinfo rtw_8822bu >/dev/null 2>&1 || {
+        log "[-] rtw88 install completed, but module rtw_8822bu is not available."
         return 1
     }
 }
@@ -370,18 +390,20 @@ fi
 
 log "[+] Creating Ghostlink-Mini directories..."
 mkdir -p /etc/ghostlink /var/lib/ghostlink /var/log/ghostlink
-chmod 755 /etc/ghostlink /var/lib/ghostlink /var/log/ghostlink
+set_runtime_permissions
+
+sync_project
+install_launcher
 
 log "[+] Updating apt repositories..."
 run_logged apt-get update -y || { log "[-] Failed to update apt"; exit 1; }
 
 log "[+] Installing system dependencies..."
-DEPENDENCIES="git rsync dkms build-essential bc libelf-dev aircrack-ng hostapd dnsmasq iw rfkill iproute2 wireless-tools python3 python3-pip wifite network-manager"
+DEPENDENCIES="git rsync dkms build-essential bc libelf-dev aircrack-ng hostapd dnsmasq iw rfkill iproute2 iptables wireless-tools python3 python3-pip wifite network-manager"
 run_logged apt-get install -y $DEPENDENCIES || { log "[-] Failed to install dependencies. See $SETUP_LOG"; exit 1; }
 
-sync_project
-install_launcher
-python3 "$INSTALL_DIR/$SRC_ENTRY" -db >>"$SETUP_LOG" 2>&1 || log "[!] Database initialization/status check reported a warning. Run ghostlink -db for details."
+PYTHONDONTWRITEBYTECODE=1 python3 "$INSTALL_DIR/$SRC_ENTRY" -db >>"$SETUP_LOG" 2>&1 || log "[!] Database initialization/status check reported a warning. Run ghostlink -db for details."
+set_runtime_permissions
 
 echo ""
 log "--- Kernel Headers ---"
@@ -394,9 +416,8 @@ configure_management_wifi || log "[!] Management Wi-Fi configuration was skipped
 echo ""
 log "--- Driver Installation ---"
 log "Build/install output is logged to $SETUP_LOG"
-install_rtw88_driver || { log "[-] Required driver RTL8812AU failed. See $SETUP_LOG"; exit 1; }
-install_driver "RTL88x2BU" "https://github.com/morrownr/88x2bu-20210702.git" "88x2bu" "88x2bu" || { log "[-] Required driver RTL88x2BU failed. See $SETUP_LOG"; exit 1; }
-install_rtl8188eus || { log "[-] Required driver RTL8188EUS failed. See $SETUP_LOG"; exit 1; }
+install_rtw88_driver || { log "[-] Required rtw88 driver install failed. See $SETUP_LOG"; exit 1; }
+install_rtl8188eus || log "[!] Optional backup driver RTL8188EUS failed. Continuing; see $SETUP_LOG"
 
 echo ""
 log "--- Verification ---"

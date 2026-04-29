@@ -2,14 +2,15 @@
 import sys
 import argparse
 import time
+import shlex
 from core.database import (
     get_db_stats, get_networks, get_credentials, get_pentests,
     save_scan_result, save_pentest_job, save_credential, update_connection_status, update_ap_status
 )
 from core.network import (
     detect_adapters, get_management_ip, scan_networks, connect_network,
-    check_internet, start_ap, stop_ap, restart_networking, run_cmd, run_cmd_no_check,
-    is_ghostlink_ap_running
+    check_internet, start_ap, stop_ap, restart_networking, run_cmd_no_check,
+    is_ghostlink_ap_running, interface_exists, get_connected_ssid
 )
 from core.pentest import start_pentest
 from core.updater import update_ghostlink
@@ -30,9 +31,7 @@ def print_status_overview():
     # Get current mgmt SSID
     mgmt_ssid = "Unknown"
     if mgmt_iface:
-        out, code = run_cmd_no_check(f"iw dev {mgmt_iface} link | grep SSID | awk '{{print $2}}'")
-        if code == 0 and out:
-            mgmt_ssid = out
+        mgmt_ssid = get_connected_ssid(mgmt_iface)
             
     # Check internet via RTL8812AU (or generally)
     internet_status = "Connected" if check_internet() else "Disconnected"
@@ -105,6 +104,9 @@ def cmd_scan(iface=None):
     if not iface:
         print("Error: No suitable adapter found for scanning.")
         return
+    if not interface_exists(iface):
+        print(f"Error: Interface {iface} does not exist.")
+        return
 
     if iface == adapters.get("management"):
         print(f"Error: Interface {iface} is configured for management. Scanning is blocked on this interface.")
@@ -136,6 +138,9 @@ def cmd_pentest(ssid, iface=None, bssid=None):
         
     if not iface:
         print("Error: No suitable adapter found for pentest.")
+        return
+    if not interface_exists(iface):
+        print(f"Error: Interface {iface} does not exist.")
         return
         
     if iface == adapters.get("management"):
@@ -261,7 +266,7 @@ def cmd_diag():
     for role, iface in adapters.items():
         print(f"- {role}: {iface if iface else 'Missing'}")
         if iface:
-            out, _ = run_cmd_no_check(f"iw dev {iface} info | grep monitor")
+            out, _ = run_cmd_no_check(f"iw dev {shlex.quote(iface)} info | grep monitor")
             support = "Yes" if out else "Unknown"
             print(f"  Monitor mode support: {support}")
             

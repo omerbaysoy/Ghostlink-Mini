@@ -1,6 +1,5 @@
 import subprocess
 import os
-import re
 import time
 import json
 import shlex
@@ -31,11 +30,28 @@ def get_interfaces():
         return []
     return [line.split()[1] for line in out.splitlines() if line.strip().startswith("Interface ")]
 
+def interface_exists(iface):
+    if not iface:
+        return False
+    return os.path.exists(f"/sys/class/net/{os.path.basename(iface)}")
+
 def get_driver(iface):
     safe_iface = os.path.basename(iface)
     path = f"/sys/class/net/{safe_iface}/device/driver"
     target = os.path.realpath(path) if os.path.exists(path) else ""
     return os.path.basename(target) if target else "Unknown"
+
+def get_connected_ssid(iface):
+    if not interface_exists(iface):
+        return "Unknown"
+    out, code = run_cmd_no_check(f"iw dev {shlex.quote(iface)} link")
+    if code != 0:
+        return "Unknown"
+    for line in out.splitlines():
+        line = line.strip()
+        if line.startswith("SSID:"):
+            return line.split("SSID:", 1)[1].strip() or "Unknown"
+    return "Unknown"
 
 def _nm_active_wifi_interfaces():
     out, code = run_cmd_no_check("nmcli -t -f DEVICE,TYPE,STATE device status")
@@ -68,7 +84,7 @@ def detect_adapters():
         driver = get_driver(iface)
         if driver in ["8812au", "rtw_8812au"]:
             adapters["rtl8812au"] = iface
-        elif driver == "88x2bu":
+        elif driver in ["88x2bu", "rtw_8822bu"]:
             adapters["rtl88x2bu"] = iface
         elif driver in ["r8188eu", "8188eu"]:
             adapters["rtl8188eus"] = iface
@@ -85,6 +101,8 @@ def detect_adapters():
     return adapters
 
 def get_management_ip(iface):
+    if not interface_exists(iface):
+        return "Disconnected"
     out = run_cmd(f"ip -4 addr show {shlex.quote(iface)} | awk '/inet / {{print $2}}'")
     if out:
         return out.split('/')[0]
@@ -109,7 +127,7 @@ def _split_nmcli_line(line):
     return parts
 
 def scan_networks(iface):
-    if not iface:
+    if not interface_exists(iface):
         return []
     
     run_cmd(f"ip link set {shlex.quote(iface)} up")
@@ -139,6 +157,9 @@ def scan_networks(iface):
     return networks
 
 def connect_network(iface, ssid, password):
+    if not interface_exists(iface):
+        return False
+
     run_cmd(f"nmcli device disconnect {shlex.quote(iface)}")
 
     cmd = (
@@ -219,6 +240,12 @@ def _ap_rules(ap_iface, uplink_iface):
 
 def start_ap(ap_iface, uplink_iface):
     if not require_root("Starting Ghostlink-AP"):
+        return False
+    if not interface_exists(ap_iface):
+        print(f"Error: AP interface {ap_iface} does not exist.")
+        return False
+    if not interface_exists(uplink_iface):
+        print(f"Error: Uplink interface {uplink_iface} does not exist.")
         return False
 
     _ensure_runtime_dir()

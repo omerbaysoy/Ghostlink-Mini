@@ -128,9 +128,6 @@ def save_credential(pentest_id, ssid, bssid, password, adapter):
 
 def get_credentials():
     try:
-        readonly = os.path.exists(DB_PATH) and (
-            not os.access(_db_dir(), os.W_OK) or not os.access(DB_PATH, os.W_OK)
-        )
         conn = get_connection()
         c = conn.cursor()
         c.execute('SELECT * FROM credentials ORDER BY timestamp DESC')
@@ -191,6 +188,9 @@ def get_db_stats():
         }
 
     try:
+        readonly = os.path.exists(DB_PATH) and (
+            not os.access(_db_dir(), os.W_OK) or not os.access(DB_PATH, os.W_OK)
+        )
         conn = get_connection()
         c = conn.cursor()
         c.execute('SELECT COUNT(*) FROM networks')
