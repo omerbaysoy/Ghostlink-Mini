@@ -3,6 +3,7 @@ import argparse
 import os
 import time
 import shlex
+import sys
 from core.database import (
     get_db_stats, get_credentials, save_scan_result, save_pentest_job,
     save_credential, update_connection_status
@@ -404,51 +405,55 @@ def cmd_update():
 
 def interactive_menu():
     while True:
-        print_banner()
-        print_status_overview()
-        
-        print("1. Status")
-        print("2. Scan Wi-Fi networks")
-        print("3. Start pentest with RTL8812AU")
-        print("4. Show saved credentials")
-        print("5. Connect RTL8812AU to saved network")
-        print("6. Start Ghostlink-AP on RTL88x2BU")
-        print("7. Stop Ghostlink-AP")
-        print("8. Restart networking services")
-        print("9. Run diagnostics")
-        print("10. Update Ghostlink-Mini")
-        print("11. Exit")
-        
-        choice = input("\nSelect option: ")
-        
-        if choice == '1':
-            cmd_status()
-        elif choice == '2':
-            cmd_scan()
-        elif choice == '3':
-            ssid = input("Target SSID: ")
-            if ssid:
-                cmd_pentest(ssid)
-        elif choice == '4':
-            cmd_creds()
-        elif choice == '5':
-            cmd_connect()
-        elif choice == '6':
-            cmd_ap_start()
-        elif choice == '7':
-            cmd_ap_stop()
-        elif choice == '8':
-            cmd_restart_net()
-        elif choice == '9':
-            cmd_diag()
-        elif choice == '10':
-            cmd_update()
-        elif choice == '11':
-            break
-        else:
-            print("Invalid option.")
+        try:
+            print_banner()
+            print_status_overview()
             
-        input("\nPress Enter to continue...")
+            print("1. Status")
+            print("2. Scan Wi-Fi networks")
+            print("3. Start pentest with RTL8812AU")
+            print("4. Show saved credentials")
+            print("5. Connect RTL8812AU to saved network")
+            print("6. Start Ghostlink-AP on RTL88x2BU")
+            print("7. Stop Ghostlink-AP")
+            print("8. Restart networking services")
+            print("9. Run diagnostics")
+            print("10. Update Ghostlink-Mini")
+            print("11. Exit")
+            
+            choice = input("\nSelect option: ")
+            
+            if choice == '1':
+                cmd_status()
+            elif choice == '2':
+                cmd_scan()
+            elif choice == '3':
+                ssid = input("Target SSID: ")
+                if ssid:
+                    cmd_pentest(ssid)
+            elif choice == '4':
+                cmd_creds()
+            elif choice == '5':
+                cmd_connect()
+            elif choice == '6':
+                cmd_ap_start()
+            elif choice == '7':
+                cmd_ap_stop()
+            elif choice == '8':
+                cmd_restart_net()
+            elif choice == '9':
+                cmd_diag()
+            elif choice == '10':
+                cmd_update()
+            elif choice == '11':
+                break
+            else:
+                print("Invalid option.")
+                
+            input("\nPress Enter to continue...")
+        except KeyboardInterrupt:
+            print("\nExiting Ghostlink-Mini.")
+            break
 
 def main():
     parser = argparse.ArgumentParser(description="Ghostlink-Mini")
@@ -504,4 +509,8 @@ def main():
         interactive_menu()
 
 if __name__ == '__main__':
-    main()
+    try:
+        main()
+    except KeyboardInterrupt:
+        print("\nExiting Ghostlink-Mini.")
+        sys.exit(0)
