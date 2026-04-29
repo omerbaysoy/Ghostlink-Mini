@@ -314,7 +314,7 @@ remove_dkms_module_versions() {
 }
 
 rtl8812au_ready() {
-    module_available 88XXau rtw_8812au rtw88_8812au
+    module_available 8812au 88XXau rtw_8812au rtw88_8812au
 }
 
 rtl88x2bu_ready() {
@@ -322,14 +322,11 @@ rtl88x2bu_ready() {
 }
 
 install_rtl8812au_pentest_driver() {
-    local dir_name="rtl8812au"
-    local repo_url="https://github.com/aircrack-ng/rtl8812au.git"
-    local branch="v5.6.4.2"
     local arch
     arch="$(dpkg --print-architecture 2>/dev/null || uname -m)"
 
-    if module_available 88XXau; then
-        log "[+] Driver RTL8812AU pentest module (88XXau) already installed."
+    if module_available 8812au || module_available 88XXau; then
+        log "[+] Driver RTL8812AU pentest module (8812au or 88XXau) already installed."
         return 0
     fi
 
@@ -338,52 +335,93 @@ install_rtl8812au_pentest_driver() {
         return 1
     fi
 
-    log "[+] Installing RTL8812AU pentest driver via aircrack-ng/rtl8812au..."
-    mkdir -p /usr/src
+    log "[+] Stopping any conflicting modules..."
+    for mod in rtw_8812au rtw88_8812au rtl8xxxu 88XXau 8812au; do
+        if lsmod | grep -q "^$mod"; then
+            run_logged modprobe -r "$mod" || true
+        fi
+    done
 
+    # Try morrownr first
+    local dir_name="8812au-20210820"
+    local repo_url="https://github.com/morrownr/8812au-20210820.git"
+    
+    log "[+] Attempting to install morrownr/8812au-20210820 (Primary pentest driver)..."
+    mkdir -p /usr/src
     if [ -d "/usr/src/$dir_name/.git" ]; then
-        run_logged_timeout 300 git -C "/usr/src/$dir_name" fetch --tags origin || return 1
-        run_logged git -C "/usr/src/$dir_name" checkout "$branch" || return 1
-        run_logged git -C "/usr/src/$dir_name" reset --hard "$branch" || return 1
-        run_logged_timeout 300 git -C "/usr/src/$dir_name" pull --ff-only || return 1
+        run_logged_timeout 300 git -C "/usr/src/$dir_name" pull --ff-only || true
     elif [ -e "/usr/src/$dir_name" ]; then
-        log "[-] /usr/src/$dir_name exists but is not a git checkout. Move it aside and rerun setup."
-        return 1
+        log "[-] /usr/src/$dir_name exists but is not a git checkout."
     else
-        run_logged_timeout 600 git clone -b "$branch" --single-branch "$repo_url" "/usr/src/$dir_name" || return 1
+        run_logged_timeout 600 git clone "$repo_url" "/usr/src/$dir_name" || true
     fi
 
-    case "$arch" in
-        arm64|aarch64)
-            run_logged sed -i 's/CONFIG_PLATFORM_I386_PC = y/CONFIG_PLATFORM_I386_PC = n/g' "/usr/src/$dir_name/Makefile"
-            run_logged sed -i 's/CONFIG_PLATFORM_ARM64_RPI = n/CONFIG_PLATFORM_ARM64_RPI = y/g' "/usr/src/$dir_name/Makefile"
-            run_logged sed -i 's/^MAKE="\(ARCH=[^ ]* \)*/MAKE="ARCH=arm64 /' "/usr/src/$dir_name/dkms.conf"
-            ;;
-        armhf|armel|armv7l)
-            run_logged sed -i 's/CONFIG_PLATFORM_I386_PC = y/CONFIG_PLATFORM_I386_PC = n/g' "/usr/src/$dir_name/Makefile"
-            run_logged sed -i 's/CONFIG_PLATFORM_ARM_RPI = n/CONFIG_PLATFORM_ARM_RPI = y/g' "/usr/src/$dir_name/Makefile"
-            run_logged sed -i 's/^MAKE="\(ARCH=[^ ]* \)*/MAKE="ARCH=arm /' "/usr/src/$dir_name/dkms.conf"
-            ;;
-    esac
+    if [ -d "/usr/src/$dir_name" ]; then
+        remove_dkms_module_versions 8812au
+        if run_shell_logged_timeout "$DRIVER_TIMEOUT_SECONDS" "cd /usr/src/$dir_name && ./install-driver.sh NoPrompt"; then
+            cat >/etc/modprobe.d/ghostlink-rtl8812au.conf <<'CONF'
+# Prefer morrownr 8812au for RTL8812AU monitor mode/frame injection.
+blacklist rtw_8812au
+blacklist rtw88_8812au
+blacklist rtl8xxxu
+options 8812au rtw_led_ctrl=0
+CONF
+            run_logged modprobe 8812au || true
+            if module_available 8812au; then
+                log "[+] RTL8812AU pentest driver installed successfully (morrownr/8812au)."
+                return 0
+            fi
+        fi
+    fi
 
-    remove_dkms_module_versions 8812au
-    if run_shell_logged_timeout "$DRIVER_TIMEOUT_SECONDS" "cd /usr/src/$dir_name && make dkms_install"; then
-        cat >/etc/modprobe.d/ghostlink-rtl8812au.conf <<'CONF'
+    log "[!] morrownr build failed. Falling back to aircrack-ng/rtl8812au..."
+    dir_name="rtl8812au"
+    repo_url="https://github.com/aircrack-ng/rtl8812au.git"
+    local branch="v5.6.4.2"
+    
+    if [ -d "/usr/src/$dir_name/.git" ]; then
+        run_logged_timeout 300 git -C "/usr/src/$dir_name" fetch --tags origin || true
+        run_logged git -C "/usr/src/$dir_name" checkout "$branch" || true
+        run_logged git -C "/usr/src/$dir_name" reset --hard "$branch" || true
+        run_logged_timeout 300 git -C "/usr/src/$dir_name" pull --ff-only || true
+    elif [ -e "/usr/src/$dir_name" ]; then
+        log "[-] /usr/src/$dir_name exists but is not a git checkout."
+    else
+        run_logged_timeout 600 git clone -b "$branch" --single-branch "$repo_url" "/usr/src/$dir_name" || true
+    fi
+
+    if [ -d "/usr/src/$dir_name" ]; then
+        case "$arch" in
+            arm64|aarch64)
+                run_logged sed -i 's/CONFIG_PLATFORM_I386_PC = y/CONFIG_PLATFORM_I386_PC = n/g' "/usr/src/$dir_name/Makefile"
+                run_logged sed -i 's/CONFIG_PLATFORM_ARM64_RPI = n/CONFIG_PLATFORM_ARM64_RPI = y/g' "/usr/src/$dir_name/Makefile"
+                run_logged sed -i 's/^MAKE="\(ARCH=[^ ]* \)*/MAKE="ARCH=arm64 /' "/usr/src/$dir_name/dkms.conf"
+                ;;
+            armhf|armel|armv7l)
+                run_logged sed -i 's/CONFIG_PLATFORM_I386_PC = y/CONFIG_PLATFORM_I386_PC = n/g' "/usr/src/$dir_name/Makefile"
+                run_logged sed -i 's/CONFIG_PLATFORM_ARM_RPI = n/CONFIG_PLATFORM_ARM_RPI = y/g' "/usr/src/$dir_name/Makefile"
+                run_logged sed -i 's/^MAKE="\(ARCH=[^ ]* \)*/MAKE="ARCH=arm /' "/usr/src/$dir_name/dkms.conf"
+                ;;
+        esac
+
+        remove_dkms_module_versions 8812au
+        if run_shell_logged_timeout "$DRIVER_TIMEOUT_SECONDS" "cd /usr/src/$dir_name && make dkms_install"; then
+            cat >/etc/modprobe.d/ghostlink-rtl8812au.conf <<'CONF'
 # Prefer aircrack-ng 88XXau for RTL8812AU monitor mode/frame injection.
 blacklist rtw_8812au
 blacklist rtw88_8812au
+blacklist rtl8xxxu
 options 88XXau rtw_led_ctrl=0
 CONF
-        module_available 88XXau || {
-            log "[-] aircrack-ng RTL8812AU install completed, but module 88XXau is not available."
-            return 1
-        }
-        log "[+] RTL8812AU pentest driver installed as module 88XXau."
-        return 0
+            run_logged modprobe 88XXau || true
+            if module_available 88XXau; then
+                log "[+] RTL8812AU pentest driver installed successfully as module 88XXau."
+                return 0
+            fi
+        fi
     fi
 
     log "[!] aircrack-ng RTL8812AU build failed or timed out. Falling back to rtw88 for kernel-compatible RTL8812AU support."
-    remove_dkms_module_versions 8812au
     return 1
 }
 

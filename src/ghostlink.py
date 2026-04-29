@@ -18,12 +18,10 @@ from core.updater import update_ghostlink
 
 def print_banner():
     print(r"""
-   ________               __  ___      __
-  / ____/ /_  ____  _____/ /_/ (_)____/ /__
- / / __/ __ \/ __ \/ ___/ __/ / / ___/ //_/
-/ /_/ / / / / /_/ (__  ) /_/ / / /__/ ,<
-\____/_/ /_/\____/____/\__/_/_/\___/_/|_|
-        ghostlink-mini :: signal ops
+========================================
+              GHOSTLINK-MINI
+           signal ops :: cli
+========================================
 """)
 
 def print_status_overview():
@@ -45,10 +43,16 @@ def print_status_overview():
     # Check AP status
     ap_status = "Active" if is_ghostlink_ap_running() else "Inactive"
 
+    rtl8812au_status = rtl8812au_iface if rtl8812au_iface else 'Missing'
+    if not rtl8812au_iface:
+        out, code = run_cmd_no_check("lsusb -d 0bda:8812")
+        if code == 0 and out.strip():
+            rtl8812au_status = 'Missing (USB Present, No Interface)'
+
     print(f"\n[+] Management Network: {mgmt_ssid}")
     print(f"[+] Management Interface: {mgmt_iface}")
     print(f"[+] Management IP: {mgmt_ip}")
-    print(f"[-] RTL8812AU Status: {rtl8812au_iface if rtl8812au_iface else 'Missing'}")
+    print(f"[-] RTL8812AU Status: {rtl8812au_status}")
     print(f"[-] RTL88x2BU Status: {rtl88x2bu_iface if rtl88x2bu_iface else 'Missing'}")
     print(f"[-] RTL8188EUS Status: {rtl8188eus_iface if rtl8188eus_iface else 'Missing'}")
     print(f"[-] Ghostlink-AP Status: {ap_status}")
@@ -112,6 +116,10 @@ def cmd_scan(iface=None):
     
     if not candidates:
         print("Error: No suitable adapter found for scanning.")
+        if not adapters.get("rtl8812au"):
+            out, code = run_cmd_no_check("lsusb -d 0bda:8812")
+            if code == 0 and out.strip():
+                print("Warning: RTL8812AU is physically connected but has no wireless interface. Check 'ghostlink -diag'.")
         return
 
     networks = []
@@ -183,6 +191,10 @@ def cmd_pentest(ssid, iface=None, bssid=None):
         
     if not iface:
         print("Error: No suitable adapter found for pentest.")
+        if not adapters.get("rtl8812au"):
+            out, code = run_cmd_no_check("lsusb -d 0bda:8812")
+            if code == 0 and out.strip():
+                print("Warning: RTL8812AU is physically connected but has no wireless interface. Check 'ghostlink -diag'.")
         return
     if not interface_exists(iface):
         print(f"Error: Interface {iface} does not exist.")
@@ -337,6 +349,23 @@ def cmd_diag():
             print(f"  Driver: {get_driver(iface)}")
             support = "Yes" if check_monitor_mode(iface) else "No"
             print(f"  Monitor mode support: {support}")
+            
+    if not adapters.get("rtl8812au"):
+        out, code = run_cmd_no_check("lsusb -d 0bda:8812")
+        if code == 0 and out.strip():
+            print("\n[!] WARNING: RTL8812AU USB device present but no network interface is bound")
+            print("  - USB ID: 0bda:8812")
+            print("  - Candidate modules: 8812au, 88XXau, rtw_8812au")
+            
+            lsmod_out, _ = run_cmd_no_check("lsmod | egrep '8812|88XXau'")
+            loaded_mods = [line.split()[0] for line in lsmod_out.splitlines() if line.strip()]
+            print(f"  - Loaded modules: {', '.join(loaded_mods) if loaded_mods else 'None'}")
+            
+            dmesg_out, _ = run_cmd_no_check("dmesg | egrep -i '8812|0bda:8812' | tail -n 3")
+            if dmesg_out:
+                print(f"  - dmesg hint:\n      " + "\n      ".join(dmesg_out.splitlines()))
+                
+            print("  - Next action: Try 'sudo modprobe 8812au' or 'sudo ./setup.sh --update' to rebuild.")
             
     print("\nDependencies:")
     for tool in ['wifite', 'airgeddon', 'aircrack-ng', 'hostapd', 'dnsmasq', 'iw', 'nmcli']:

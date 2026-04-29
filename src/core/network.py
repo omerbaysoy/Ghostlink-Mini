@@ -70,6 +70,50 @@ def get_modalias(iface):
     except OSError:
         return ""
 
+def get_usb_id(iface):
+    safe_iface = os.path.basename(iface)
+    
+    device_path = f"/sys/class/net/{safe_iface}/device"
+    current = device_path
+    for _ in range(3):
+        if os.path.exists(os.path.join(current, "idVendor")) and os.path.exists(os.path.join(current, "idProduct")):
+            try:
+                with open(os.path.join(current, "idVendor")) as f:
+                    vendor = f.read().strip()
+                with open(os.path.join(current, "idProduct")) as f:
+                    product = f.read().strip()
+                return f"{vendor}:{product}"
+            except OSError:
+                pass
+        current = os.path.dirname(os.path.realpath(current))
+
+    uevent_path = f"/sys/class/net/{safe_iface}/device/uevent"
+    if os.path.exists(uevent_path):
+        try:
+            with open(uevent_path, "r") as f:
+                for line in f:
+                    if line.startswith("PRODUCT="):
+                        parts = line.strip().split('=')[1].split('/')
+                        if len(parts) >= 2:
+                            return f"{int(parts[0], 16):04x}:{int(parts[1], 16):04x}"
+        except OSError:
+            pass
+            
+    modalias_path = f"/sys/class/net/{safe_iface}/device/modalias"
+    if os.path.exists(modalias_path):
+        try:
+            with open(modalias_path, "r") as f:
+                modalias = f.read().strip()
+                if modalias.startswith("usb:v"):
+                    import re
+                    m = re.search(r"v([0-9A-Fa-f]{4})p([0-9A-Fa-f]{4})", modalias)
+                    if m:
+                        return f"{m.group(1).lower()}:{m.group(2).lower()}"
+        except OSError:
+            pass
+            
+    return None
+
 def get_default_route_iface():
     for cmd in ["ip route get 1.1.1.1", "ip route show default"]:
         out, code = run_cmd_no_check(cmd)
@@ -125,14 +169,20 @@ def detect_adapters():
     
     for iface in ifaces:
         driver = get_driver(iface)
+        usb_id = get_usb_id(iface)
         modalias = get_modalias(iface).lower()
-        if driver in ["8812au", "88XXau", "rtw_8812au", "rtw88_8812au"]:
+        
+        if usb_id == "0bda:8812":
             adapters["rtl8812au"] = iface
-        elif driver in ["88x2bu", "rtw_8822bu", "rtw88_8822bu"]:
+        elif usb_id == "0bda:b812":
             adapters["rtl88x2bu"] = iface
-        elif driver in ["r8188eu", "8188eu"] or (
-            driver == "rtl8xxxu" and any(chip in modalias for chip in ["v2357p010c", "v0bdap8179"])
-        ):
+        elif usb_id == "2357:010c":
+            adapters["rtl8188eus"] = iface
+        elif driver in ["8812au", "88XXau", "rtw_8812au", "rtw88_8812au"] and not adapters["rtl8812au"]:
+            adapters["rtl8812au"] = iface
+        elif driver in ["88x2bu", "rtw_8822bu", "rtw88_8822bu"] and not adapters["rtl88x2bu"]:
+            adapters["rtl88x2bu"] = iface
+        elif (driver in ["r8188eu", "8188eu"] or (driver == "rtl8xxxu" and any(chip in modalias for chip in ["v2357p010c", "v0bdap8179"]))) and not adapters["rtl8188eus"]:
             adapters["rtl8188eus"] = iface
         elif driver in ["brcmfmac", "brcmsmac"]: # Onboard pi wifi usually uses broadcom
             if not adapters["management"]:
