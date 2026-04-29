@@ -8,7 +8,8 @@ from core.database import (
 )
 from core.network import (
     detect_adapters, get_management_ip, scan_networks, connect_network,
-    check_internet, start_ap, stop_ap, restart_networking, run_cmd, run_cmd_no_check
+    check_internet, start_ap, stop_ap, restart_networking, run_cmd, run_cmd_no_check,
+    is_ghostlink_ap_running
 )
 from core.pentest import start_pentest
 from core.updater import update_ghostlink
@@ -37,10 +38,7 @@ def print_status_overview():
     internet_status = "Connected" if check_internet() else "Disconnected"
     
     # Check AP status
-    ap_status = "Inactive"
-    out, code = run_cmd_no_check("systemctl is-active hostapd")
-    if code == 0 and out.strip() == "active":
-        ap_status = "Active"
+    ap_status = "Active" if is_ghostlink_ap_running() else "Inactive"
 
     print(f"\n[+] Management Network: {mgmt_ssid}")
     print(f"[+] Management Interface: {mgmt_iface}")
@@ -57,9 +55,7 @@ def cmd_status():
     print_banner()
     adapters = print_status_overview()
     print("--- Detailed Status ---")
-    out, _ = run_cmd_no_check("systemctl is-active dnsmasq")
-    dnsmasq_status = out.strip()
-    print(f"DHCP/NAT Status: {'Active' if dnsmasq_status == 'active' else 'Inactive'}")
+    print(f"DHCP/NAT Status: {'Active' if is_ghostlink_ap_running() else 'Inactive'}")
     creds = get_credentials()
     if creds:
         latest = creds[0]
@@ -70,7 +66,10 @@ def cmd_status():
 def cmd_db():
     stats = get_db_stats()
     print("\n--- Database Status ---")
+    print(f"Database Path: {stats.get('path', '/var/lib/ghostlink/ghostlink.db')}")
     print(f"Database Health: {stats['health']}")
+    if stats.get("message"):
+        print(f"Message: {stats['message']}")
     print(f"Total Saved Credentials: {stats['total_creds']}")
     print(f"Total Scan Records: {stats['total_networks']}")
     print(f"Total Pentest Jobs: {stats['total_pentests']}")
@@ -123,7 +122,11 @@ def cmd_scan(iface=None):
     print("-" * 65)
     for n in networks:
         print(f"{n['ssid']:<25} {n['bssid']:<20} {n['channel']:<4} {n['signal']:<4} {n['encryption']}")
-        save_scan_result(n['ssid'], n['bssid'], n['channel'], n['signal'], n['encryption'], n['interface'])
+        try:
+            save_scan_result(n['ssid'], n['bssid'], n['channel'], n['signal'], n['encryption'], n['interface'])
+        except RuntimeError as e:
+            print(f"\nWarning: scan results were not saved: {e}")
+            return
     print("\nResults saved to database.")
 
 def cmd_pentest(ssid, iface=None, bssid=None):
@@ -150,10 +153,12 @@ def cmd_pentest(ssid, iface=None, bssid=None):
     
     if result["status"] == "success":
         print(f"\n[+] SUCCESS: Recovered key for {ssid}")
-        # Save to DB
-        pentest_id = save_pentest_job(ssid, result.get("bssid", bssid), iface, "wifite", "success", result.get("log_path", ""))
-        save_credential(pentest_id, ssid, result.get("bssid", bssid), result["password"], iface)
-        print("Credentials saved to database.")
+        try:
+            pentest_id = save_pentest_job(ssid, result.get("bssid", bssid), iface, "wifite", "success", result.get("log_path", ""))
+            save_credential(pentest_id, ssid, result.get("bssid", bssid), result["password"], iface)
+            print("Credentials saved to database.")
+        except RuntimeError as e:
+            print(f"Warning: credentials were not saved: {e}")
         
         # Post-success flow
         conn = input(f"Do you want to connect RTL8812AU to '{ssid}' now? (y/n): ")
@@ -165,7 +170,10 @@ def cmd_pentest(ssid, iface=None, bssid=None):
     else:
         print(f"\n[-] FAILED: {result.get('message')}")
         print(f"Log saved to: {result.get('log_path')}")
-        save_pentest_job(ssid, bssid, iface, "wifite", "failed", result.get("log_path", ""))
+        try:
+            save_pentest_job(ssid, bssid, iface, "wifite", "failed", result.get("log_path", ""))
+        except RuntimeError as e:
+            print(f"Warning: pentest result was not saved: {e}")
 
 def do_connect(ssid, password):
     adapters = detect_adapters()
@@ -200,7 +208,10 @@ def cmd_connect():
         idx = int(choice) - 1
         if 0 <= idx < len(creds):
             do_connect(creds[idx]['ssid'], creds[idx]['password'])
-            update_connection_status(creds[idx]['id'], 'Connected')
+            try:
+                update_connection_status(creds[idx]['id'], 'Connected')
+            except RuntimeError as e:
+                print(f"Warning: connection status was not saved: {e}")
 
 def cmd_ap_start():
     adapters = detect_adapters()
@@ -215,14 +226,12 @@ def cmd_ap_start():
         return
         
     print(f"Starting Ghostlink-AP on {ap_iface} shared via {uplink_iface}...")
-    start_ap(ap_iface, uplink_iface)
+    if not start_ap(ap_iface, uplink_iface):
+        return
     
     print("Checking services...")
     time.sleep(2)
-    h_out, _ = run_cmd_no_check("systemctl is-active hostapd || killall -0 hostapd && echo 'active'")
-    d_out, _ = run_cmd_no_check("systemctl is-active dnsmasq || killall -0 dnsmasq && echo 'active'")
-    
-    if 'active' in h_out and 'active' in d_out:
+    if is_ghostlink_ap_running():
         print("[+] Ghostlink-AP is running (SSID: Ghostlink-AP, Password: Ghostlink123*)")
     else:
         print("[-] Failed to start AP services. Run 'ghostlink -diag' for more info.")
@@ -232,10 +241,12 @@ def cmd_ap_stop():
     ap_iface = adapters.get("rtl88x2bu")
     uplink_iface = adapters.get("rtl8812au")
     if not ap_iface or not uplink_iface:
-        print("Cannot determine interfaces to stop AP. Applying generic stop...")
-        run_cmd_no_check("killall hostapd dnsmasq")
+        print("Cannot determine live interfaces. Stopping Ghostlink-created AP state only...")
+        if not stop_ap(ap_iface, uplink_iface):
+            return
     else:
-        stop_ap(ap_iface, uplink_iface)
+        if not stop_ap(ap_iface, uplink_iface):
+            return
     print("Ghostlink-AP stopped.")
 
 def cmd_diag():
@@ -263,14 +274,16 @@ def cmd_diag():
     print(f"- Ping 8.8.8.8: {'Success' if check_internet() else 'Failed'}")
     
     print("\nDatabase Health:")
-    print(f"- Path: /var/lib/ghostlink/ghostlink.db")
     stats = get_db_stats()
+    print(f"- Path: {stats.get('path', '/var/lib/ghostlink/ghostlink.db')}")
     print(f"- Status: {stats['health']}")
+    if stats.get("message"):
+        print(f"- Message: {stats['message']}")
     
 def cmd_restart_net():
     print("Restarting networking services...")
-    restart_networking()
-    print("Restart command sent.")
+    if restart_networking():
+        print("Restart command sent.")
 
 def cmd_update():
     print("Updating Ghostlink-Mini...")

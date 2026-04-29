@@ -11,13 +11,23 @@ DB_PATH = os.path.join(GHOSTLINK_LIB_DIR, "ghostlink.db")
 CONFIG_PATH = os.path.join(GHOSTLINK_DIR, "config.json")
 ADAPTER_MAP_PATH = os.path.join(GHOSTLINK_DIR, "adapters.json")
 
-# Ensure paths exist (mostly for local testing without root, though setup.sh makes these)
 def ensure_paths():
+    errors = []
     for p in [GHOSTLINK_DIR, GHOSTLINK_LIB_DIR, GHOSTLINK_LOG_DIR]:
         try:
             os.makedirs(p, exist_ok=True)
-        except PermissionError:
-            pass # We might not be root, handle gracefully if possible
+        except OSError as e:
+            errors.append(f"{p}: {e}")
+    return errors
+
+def path_status(path):
+    p = Path(path)
+    return {
+        "path": str(p),
+        "exists": p.exists(),
+        "readable": os.access(path, os.R_OK) if p.exists() else False,
+        "writable": os.access(path, os.W_OK) if p.exists() else False,
+    }
 
 def load_config():
     if not os.path.exists(CONFIG_PATH):
@@ -30,8 +40,10 @@ def load_config():
 
 def save_config(config):
     try:
+        os.makedirs(os.path.dirname(CONFIG_PATH), exist_ok=True)
         with open(CONFIG_PATH, "w") as f:
             json.dump(config, f, indent=4)
+            f.write("\n")
     except Exception as e:
         print(f"Error saving config: {e}")
 
@@ -46,9 +58,12 @@ def load_adapter_map():
 
 def save_adapter_map(adapter_map):
     try:
+        os.makedirs(os.path.dirname(ADAPTER_MAP_PATH), exist_ok=True)
         with open(ADAPTER_MAP_PATH, "w") as f:
             json.dump(adapter_map, f, indent=4)
+            f.write("\n")
+        return True
     except Exception as e:
-        print(f"Error saving adapter map: {e}")
+        return False
 
 ensure_paths()
