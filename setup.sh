@@ -101,8 +101,8 @@ install_launcher() {
     local tmp_launcher
     tmp_launcher="$(mktemp)"
     cat >"$tmp_launcher" <<'LAUNCHER'
-#!/bin/sh
-export PYTHONPATH="/opt/ghostlink-mini/src${PYTHONPATH:+:$PYTHONPATH}"
+#!/bin/bash
+export PYTHONPATH=/opt/ghostlink-mini/src
 exec python3 /opt/ghostlink-mini/src/ghostlink.py "$@"
 LAUNCHER
     install -m 0755 "$tmp_launcher" "$LAUNCHER"
@@ -208,6 +208,50 @@ kernel_headers_available() {
     [ -d "/lib/modules/$release/build" ]
 }
 
+apt_package_available() {
+    local package="$1"
+    local candidate
+    candidate="$(apt-cache policy "$package" 2>/dev/null | awk '/Candidate:/ {print $2; exit}')"
+    [ -n "$candidate" ] && [ "$candidate" != "(none)" ]
+}
+
+install_kernel_headers() {
+    local release arch checked package
+    release="$(uname -r)"
+    arch="$(dpkg --print-architecture 2>/dev/null || echo unknown)"
+    checked="linux-headers-rpi-v8 linux-headers-$release"
+
+    if kernel_headers_available; then
+        log "[+] Kernel headers are available at /lib/modules/$release/build."
+        return 0
+    fi
+
+    log "[+] Kernel headers are missing for $release; checking available packages..."
+    for package in linux-headers-rpi-v8 "linux-headers-$release"; do
+        if apt_package_available "$package"; then
+            log "[+] Installing kernel headers package: $package"
+            run_logged apt-get install -y "$package" || {
+                log "[-] Failed to install kernel headers package: $package"
+                return 1
+            }
+            if kernel_headers_available; then
+                log "[+] Kernel headers are now available at /lib/modules/$release/build."
+                return 0
+            fi
+            log "[!] Package $package installed, but /lib/modules/$release/build is still missing."
+        else
+            log "[!] Kernel header package is not available from apt: $package"
+        fi
+    done
+
+    log "[-] Kernel headers are missing; required driver builds cannot continue."
+    log "[-] Current kernel: $release"
+    log "[-] Architecture: $arch"
+    log "[-] Checked packages: $checked"
+    log "[-] Log path: $SETUP_LOG"
+    return 1
+}
+
 install_driver() {
     local name="$1"
     local repo_url="$2"
@@ -289,14 +333,18 @@ log "[+] Updating apt repositories..."
 run_logged apt-get update -y || { log "[-] Failed to update apt"; exit 1; }
 
 log "[+] Installing system dependencies..."
-DEPENDENCIES="git rsync dkms build-essential bc libelf-dev raspberrypi-kernel-headers aircrack-ng hostapd dnsmasq iw rfkill iproute2 wireless-tools python3 python3-pip wifite network-manager"
+DEPENDENCIES="git rsync dkms build-essential bc libelf-dev aircrack-ng hostapd dnsmasq iw rfkill iproute2 wireless-tools python3 python3-pip wifite network-manager"
 run_logged apt-get install -y $DEPENDENCIES || { log "[-] Failed to install dependencies. See $SETUP_LOG"; exit 1; }
-
-install_airgeddon || { log "[-] Failed to install Airgeddon. See $SETUP_LOG"; exit 1; }
 
 sync_project
 install_launcher
 python3 "$INSTALL_DIR/$SRC_ENTRY" -db >>"$SETUP_LOG" 2>&1 || log "[!] Database initialization/status check reported a warning. Run ghostlink -db for details."
+
+echo ""
+log "--- Kernel Headers ---"
+install_kernel_headers || exit 1
+
+install_airgeddon || { log "[-] Failed to install Airgeddon. See $SETUP_LOG"; exit 1; }
 
 configure_management_wifi || log "[!] Management Wi-Fi configuration was skipped or failed; existing network state was left alone."
 
