@@ -514,6 +514,34 @@ install_rtl8188eus() {
     (cd /usr/src/rtl8188eus && make && make install && modprobe 8188eu) >>"$SETUP_LOG" 2>&1 || return 1
 }
 
+configure_zram() {
+    log "[+] Configuring 2GB ZRAM..."
+    cat >/etc/default/zramswap <<'EOF'
+ALGO=lz4
+PERCENT=50
+SIZE=2048
+EOF
+    run_logged systemctl restart zramswap || true
+}
+
+configure_rpi5_fan() {
+    if [ -f /boot/firmware/config.txt ]; then
+        if ! grep -q "fan_temp0=" /boot/firmware/config.txt; then
+            log "[+] Configuring Raspberry Pi 5 Active Cooler thresholds..."
+            cat >>/boot/firmware/config.txt <<'EOF'
+
+# Ghostlink-Mini: RPi 5 Active Cooler medium-high profile
+dtparam=fan_temp0=45000
+dtparam=fan_temp0_speed=150
+dtparam=fan_temp1=55000
+dtparam=fan_temp1_speed=200
+dtparam=fan_temp2=65000
+dtparam=fan_temp2_speed=255
+EOF
+        fi
+    fi
+}
+
 echo "======================================"
 echo "    Ghostlink-Mini Setup Script"
 echo "======================================"
@@ -536,7 +564,7 @@ log "[+] Updating apt repositories..."
 run_logged apt-get update -y || { log "[-] Failed to update apt"; exit 1; }
 
 log "[+] Installing system dependencies..."
-DEPENDENCIES="git rsync dkms build-essential bc libelf-dev aircrack-ng hostapd dnsmasq iw rfkill iproute2 iptables wireless-tools python3 python3-pip wifite network-manager nmap"
+DEPENDENCIES="git rsync dkms build-essential bc libelf-dev aircrack-ng hostapd dnsmasq iw rfkill iproute2 iptables wireless-tools python3 python3-pip wifite network-manager nmap zram-tools"
 run_logged apt-get install -y $DEPENDENCIES || { log "[-] Failed to install dependencies. See $SETUP_LOG"; exit 1; }
 
 PYTHONDONTWRITEBYTECODE=1 python3 "$INSTALL_DIR/$SRC_ENTRY" -db >>"$SETUP_LOG" 2>&1 || log "[!] Database initialization/status check reported a warning. Run ghostlink -db for details."
@@ -557,6 +585,11 @@ remove_dkms_module_versions rtl88x2bu
 install_rtl8812au_pentest_driver || log "[!] RTL8812AU pentest driver failed; rtw88 fallback will be used if available."
 install_rtw88_driver || { log "[-] Required RTL88x2BU rtw88 driver install failed. See $SETUP_LOG"; exit 1; }
 install_rtl8188eus || log "[!] Optional backup driver RTL8188EUS failed. Continuing; see $SETUP_LOG"
+
+echo ""
+log "--- System Optimizations ---"
+configure_zram
+configure_rpi5_fan
 
 echo ""
 log "--- Verification ---"
