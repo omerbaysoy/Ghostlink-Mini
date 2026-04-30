@@ -88,6 +88,46 @@ def init_db():
         )
     ''')
 
+    # Network Scan Jobs
+    c.execute('''
+        CREATE TABLE IF NOT EXISTS network_scan_jobs (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            scan_type TEXT,
+            target TEXT,
+            command_used TEXT,
+            status TEXT,
+            log_path TEXT,
+            timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
+        )
+    ''')
+
+    # Network Scan Hosts
+    c.execute('''
+        CREATE TABLE IF NOT EXISTS network_scan_hosts (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            job_id INTEGER,
+            ip_address TEXT,
+            hostname TEXT,
+            state TEXT,
+            mac_address TEXT,
+            FOREIGN KEY(job_id) REFERENCES network_scan_jobs(id)
+        )
+    ''')
+
+    # Network Scan Ports
+    c.execute('''
+        CREATE TABLE IF NOT EXISTS network_scan_ports (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            host_id INTEGER,
+            port INTEGER,
+            protocol TEXT,
+            state TEXT,
+            service TEXT,
+            version TEXT,
+            FOREIGN KEY(host_id) REFERENCES network_scan_hosts(id)
+        )
+    ''')
+
     conn.commit()
     conn.close()
 
@@ -174,6 +214,76 @@ def update_ap_status(cred_id, status):
     c.execute('UPDATE credentials SET ap_status = ? WHERE id = ?', (status, cred_id))
     conn.commit()
     conn.close()
+
+def save_network_scan_job(scan_type, target, command_used, status, log_path):
+    _ensure_writable_database()
+    conn = get_connection()
+    c = conn.cursor()
+    c.execute('''
+        INSERT INTO network_scan_jobs (scan_type, target, command_used, status, log_path)
+        VALUES (?, ?, ?, ?, ?)
+    ''', (scan_type, target, command_used, status, log_path))
+    last_id = c.lastrowid
+    conn.commit()
+    conn.close()
+    return last_id
+
+def save_network_scan_host(job_id, ip_address, hostname, state, mac_address):
+    _ensure_writable_database()
+    conn = get_connection()
+    c = conn.cursor()
+    c.execute('''
+        INSERT INTO network_scan_hosts (job_id, ip_address, hostname, state, mac_address)
+        VALUES (?, ?, ?, ?, ?)
+    ''', (job_id, ip_address, hostname, state, mac_address))
+    last_id = c.lastrowid
+    conn.commit()
+    conn.close()
+    return last_id
+
+def save_network_scan_port(host_id, port, protocol, state, service, version):
+    _ensure_writable_database()
+    conn = get_connection()
+    c = conn.cursor()
+    c.execute('''
+        INSERT INTO network_scan_ports (host_id, port, protocol, state, service, version)
+        VALUES (?, ?, ?, ?, ?, ?)
+    ''', (host_id, port, protocol, state, service, version))
+    conn.commit()
+    conn.close()
+
+def get_network_scan_jobs():
+    try:
+        conn = get_connection()
+        c = conn.cursor()
+        c.execute('SELECT * FROM network_scan_jobs ORDER BY timestamp DESC')
+        rows = c.fetchall()
+        conn.close()
+        return [dict(row) for row in rows]
+    except Exception:
+        return []
+
+def get_network_scan_hosts(job_id):
+    try:
+        conn = get_connection()
+        c = conn.cursor()
+        c.execute('SELECT * FROM network_scan_hosts WHERE job_id = ?', (job_id,))
+        rows = c.fetchall()
+        conn.close()
+        return [dict(row) for row in rows]
+    except Exception:
+        return []
+
+def get_network_scan_ports(host_id):
+    try:
+        conn = get_connection()
+        c = conn.cursor()
+        c.execute('SELECT * FROM network_scan_ports WHERE host_id = ?', (host_id,))
+        rows = c.fetchall()
+        conn.close()
+        return [dict(row) for row in rows]
+    except Exception:
+        return []
 
 def get_db_stats():
     if INIT_ERROR and not os.path.exists(DB_PATH):

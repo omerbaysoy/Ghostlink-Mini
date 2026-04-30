@@ -6,16 +6,18 @@ import shlex
 import sys
 from core.database import (
     get_db_stats, get_credentials, save_scan_result, save_pentest_job,
-    save_credential, update_connection_status
+    save_credential, update_connection_status,
+    get_network_scan_jobs, get_network_scan_hosts, get_network_scan_ports
 )
 from core.network import (
     detect_adapters, get_management_ip, scan_networks, connect_network,
     check_internet, start_ap, stop_ap, restart_networking, run_cmd_no_check,
     is_ghostlink_ap_running, interface_exists, get_connected_ssid,
-    is_wireless_interface, get_driver, get_operstate
+    is_wireless_interface, get_driver, get_operstate, get_default_route_iface
 )
 from core.pentest import start_pentest, check_monitor_mode
 from core.updater import update_ghostlink
+from core.scanner import run_nmap_scan
 
 def print_banner():
     print(r"""
@@ -44,18 +46,28 @@ def print_status_overview():
     # Check AP status
     ap_status = "Active" if is_ghostlink_ap_running() else "Inactive"
 
-    rtl8812au_status = rtl8812au_iface if rtl8812au_iface else 'Missing'
-    if not rtl8812au_iface:
+    rtl8812au_status = 'Missing (USB Not Found)'
+    if rtl8812au_iface:
+        rtl8812au_status = f"{rtl8812au_iface} ({get_driver(rtl8812au_iface)}, ready)"
+    else:
         out, code = run_cmd_no_check("lsusb -d 0bda:8812")
         if code == 0 and out.strip():
             rtl8812au_status = 'Missing (USB Present, No Interface)'
+            
+    rtl88x2bu_status = 'Missing'
+    if rtl88x2bu_iface:
+        rtl88x2bu_status = f"{rtl88x2bu_iface} ({get_driver(rtl88x2bu_iface)})"
+        
+    rtl8188eus_status = 'Missing'
+    if rtl8188eus_iface:
+        rtl8188eus_status = f"{rtl8188eus_iface} ({get_driver(rtl8188eus_iface)})"
 
     print(f"\n[+] Management Network: {mgmt_ssid}")
     print(f"[+] Management Interface: {mgmt_iface}")
     print(f"[+] Management IP: {mgmt_ip}")
     print(f"[-] RTL8812AU Status: {rtl8812au_status}")
-    print(f"[-] RTL88x2BU Status: {rtl88x2bu_iface if rtl88x2bu_iface else 'Missing'}")
-    print(f"[-] RTL8188EUS Status: {rtl8188eus_iface if rtl8188eus_iface else 'Missing'}")
+    print(f"[-] RTL88x2BU Status: {rtl88x2bu_status}")
+    print(f"[-] RTL8188EUS Status: {rtl8188eus_status}")
     print(f"[-] Ghostlink-AP Status: {ap_status}")
     print(f"[-] Internet Uplink: {internet_status}\n")
     return adapters
@@ -338,9 +350,10 @@ def cmd_ap_stop():
 def cmd_diag():
     print("\n--- Diagnostics ---")
     out, _ = run_cmd_no_check("cat /etc/os-release | grep PRETTY_NAME | cut -d= -f2")
-    print(f"OS Version: {out}")
+    print(f"OS Version: {out.strip('\"')}")
     out, _ = run_cmd_no_check("uname -r")
     print(f"Kernel Version: {out}")
+    print(f"Active Default Route: {get_default_route_iface()}")
     
     adapters = detect_adapters()
     print(f"\nAdapter Map:")
@@ -356,25 +369,38 @@ def cmd_diag():
         if code == 0 and out.strip():
             print("\n[!] WARNING: RTL8812AU USB device present but no network interface is bound")
             print("  - USB ID: 0bda:8812")
-            print("  - Candidate modules: 8812au, 88XXau, rtw_8812au")
+            print("  - Candidate modules: 88XXau, 8812au, rtw_8812au")
             
             lsmod_out, _ = run_cmd_no_check("lsmod | egrep '8812|88XXau'")
             loaded_mods = [line.split()[0] for line in lsmod_out.splitlines() if line.strip()]
             print(f"  - Loaded modules: {', '.join(loaded_mods) if loaded_mods else 'None'}")
             
-            dmesg_out, _ = run_cmd_no_check("dmesg | egrep -i '8812|0bda:8812' | tail -n 3")
+            dkms_out, _ = run_cmd_no_check("dkms status")
+            print(f"  - DKMS Status:\n      " + "\n      ".join(dkms_out.splitlines() if dkms_out else ["None"]))
+            
+            dmesg_out, _ = run_cmd_no_check("dmesg | egrep -i '8812|0bda:8812|88XXau' | tail -n 5")
             if dmesg_out:
                 print(f"  - dmesg hint:\n      " + "\n      ".join(dmesg_out.splitlines()))
                 
-            print("  - Next action: Try 'sudo modprobe 8812au' or 'sudo ./setup.sh --update' to rebuild.")
+            print("  - Next action: Try 'sudo modprobe 88XXau' or 'sudo modprobe 8812au'. Replug adapter. Consider 'sudo ./setup.sh --update'.")
             
     print("\nDependencies:")
-    for tool in ['wifite', 'airgeddon', 'aircrack-ng', 'hostapd', 'dnsmasq', 'iw', 'nmcli']:
+    for tool in ['wifite', 'airgeddon', 'aircrack-ng', 'hostapd', 'dnsmasq', 'iw', 'nmcli', 'nmap']:
         out, code = run_cmd_no_check(f"which {tool}")
-        print(f"- {tool}: {'Installed' if code == 0 else 'Missing'}")
+        if code == 0:
+            version = ""
+            if tool == 'nmap':
+                v_out, _ = run_cmd_no_check(f"{tool} -V | head -n 1")
+                version = f" ({v_out})"
+            elif tool == 'wifite':
+                v_out, _ = run_cmd_no_check(f"{tool} --version 2>/dev/null | head -n 1")
+                version = f" ({v_out.strip()})"
+            print(f"- {tool}: Installed{version}")
+        else:
+            print(f"- {tool}: Missing")
 
     print("\nDriver Modules:")
-    for module in ['88XXau', 'rtw_8812au', 'rtw88_8812au', 'rtw_8822bu', 'rtw88_8822bu', '8188eu', 'rtl8xxxu']:
+    for module in ['88XXau', 'rtw_8812au', 'rtw88_8812au', 'rtw_8822bu', 'rtw88_8822bu', '8188eu', 'rtl8xxxu', 'brcmfmac']:
         _, code = run_cmd_no_check(f"modinfo {shlex.quote(module)}")
         print(f"- {module}: {'Available' if code == 0 else 'Missing'}")
         
@@ -403,6 +429,93 @@ def cmd_update():
         if 'log' in res:
             print(f"Log: {res['log']}")
 
+def cmd_network_scan(args_target=None, args_type=None, args_last=False, args_list=False, args_show=None):
+    if args_list:
+        jobs = get_network_scan_jobs()
+        if not jobs:
+            print("No network scans found.")
+            return
+        print("\n--- Network Scans ---")
+        for job in jobs:
+            print(f"ID: {job['id']:<4} | {job['timestamp']} | Type: {job['scan_type']:<10} | Target: {job['target']:<15} | Status: {job['status']}")
+        return
+
+    if args_last or args_show:
+        jobs = get_network_scan_jobs()
+        if not jobs:
+            print("No network scans found.")
+            return
+            
+        job = None
+        if args_last:
+            job = jobs[0]
+        else:
+            for j in jobs:
+                if str(j['id']) == str(args_show):
+                    job = j
+                    break
+        if not job:
+            print("Scan not found.")
+            return
+            
+        print(f"\n--- Scan {job['id']} Details ---")
+        print(f"Target: {job['target']}")
+        print(f"Type: {job['scan_type']}")
+        print(f"Time: {job['timestamp']}")
+        print(f"Command: {job['command_used']}")
+        print(f"Log: {job['log_path']}")
+        
+        hosts = get_network_scan_hosts(job['id'])
+        if not hosts:
+            print("\nNo hosts found.")
+            return
+            
+        print(f"\nHosts Found: {len(hosts)}")
+        for host in hosts:
+            print(f"\n[+] {host['ip_address']} ({host['hostname'] or 'Unknown'}) - {host['mac_address'] or 'No MAC'}")
+            ports = get_network_scan_ports(host['id'])
+            if ports:
+                print(f"    {'PORT':<10} {'STATE':<10} {'SERVICE':<15} {'VERSION'}")
+                print(f"    {'-'*60}")
+                for port in ports:
+                    p = f"{port['port']}/{port['protocol']}"
+                    print(f"    {p:<10} {port['state']:<10} {port['service']:<15} {port['version']}")
+            else:
+                print("    No open ports recorded.")
+        return
+
+    # Interactive mode logic if parameters are missing
+    if not args_target:
+        args_target = input("Enter target (e.g., 192.168.1.0/24): ")
+        if not args_target:
+            return
+            
+    if not args_type:
+        print("\nScan Types:")
+        print("1. discovery")
+        print("2. quick")
+        print("3. services")
+        print("4. full")
+        t_choice = input("Select type (name): ")
+        args_type = t_choice.strip()
+        if not args_type:
+            return
+            
+    override_auth = False
+    override_large = False
+    
+    confirm = input(f"Are you authorized to scan {args_target}? (y/n/I AM AUTHORIZED): ")
+    if confirm == "I AM AUTHORIZED":
+        override_auth = True
+    elif confirm.lower() != 'y':
+        print("Aborted.")
+        return
+        
+    print("Launching Nmap scan...")
+    job_id = run_nmap_scan(args_type, args_target, override_large, override_auth)
+    if job_id:
+        print(f"Scan complete. Run 'ghostlink network-scan --show {job_id}' to view details.")
+
 def interactive_menu():
     while True:
         try:
@@ -416,10 +529,11 @@ def interactive_menu():
             print("5. Connect RTL8812AU to saved network")
             print("6. Start Ghostlink-AP on RTL88x2BU")
             print("7. Stop Ghostlink-AP")
-            print("8. Restart networking services")
-            print("9. Run diagnostics")
-            print("10. Update Ghostlink-Mini")
-            print("11. Exit")
+            print("8. Network Scan")
+            print("9. Restart networking services")
+            print("10. Run diagnostics")
+            print("11. Update Ghostlink-Mini")
+            print("12. Exit")
             
             choice = input("\nSelect option: ")
             
@@ -440,12 +554,14 @@ def interactive_menu():
             elif choice == '7':
                 cmd_ap_stop()
             elif choice == '8':
-                cmd_restart_net()
+                cmd_network_scan()
             elif choice == '9':
-                cmd_diag()
+                cmd_restart_net()
             elif choice == '10':
-                cmd_update()
+                cmd_diag()
             elif choice == '11':
+                cmd_update()
+            elif choice == '12':
                 break
             else:
                 print("Invalid option.")
@@ -478,6 +594,13 @@ def main():
     pentest_parser.add_argument('--iface', help='Interface to use')
     pentest_parser.add_argument('--ssid', required=True, help='Target SSID')
     pentest_parser.add_argument('--bssid', help='Target BSSID')
+    # network-scan command
+    nscan_parser = subparsers.add_parser('network-scan', help='Run nmap network scan')
+    nscan_parser.add_argument('--target', help='Target IP or CIDR')
+    nscan_parser.add_argument('--type', help='Scan type (discovery, quick, services, etc)')
+    nscan_parser.add_argument('--last', action='store_true', help='Show last scan results')
+    nscan_parser.add_argument('--list', action='store_true', help='List all scans')
+    nscan_parser.add_argument('--show', help='Show details for specific scan ID')
     
     args = parser.parse_args()
     
@@ -504,6 +627,8 @@ def main():
         cmd_scan(args.iface)
     elif args.command == 'pentest':
         cmd_pentest(args.ssid, args.iface, args.bssid)
+    elif args.command == 'network-scan':
+        cmd_network_scan(args.target, args.type, args.last, args.list, args.show)
     else:
         # No args, show interactive menu
         interactive_menu()
