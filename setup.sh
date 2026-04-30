@@ -156,7 +156,7 @@ detect_onboard_wifi() {
 
     for iface in $(iw dev 2>/dev/null | awk '/Interface/ {print $2}'); do
         driver="$(basename "$(readlink "/sys/class/net/$iface/device/driver" 2>/dev/null)" 2>/dev/null)"
-        type="$(cat "/sys/class/net/$iface/uevent" 2>/dev/null | awk -F= '/DEVTYPE/ {print $2}')"
+        type="$(awk -F= '/DEVTYPE/ {print $2}' "/sys/class/net/$iface/uevent" 2>/dev/null)"
         if [ "$driver" = "brcmfmac" ] || [ "$driver" = "brcmsmac" ]; then
             echo "$iface"
             return
@@ -593,8 +593,8 @@ log "[+] Updating apt repositories..."
 run_logged apt-get update -y || { log "[-] Failed to update apt"; exit 1; }
 
 log "[+] Installing system dependencies..."
-DEPENDENCIES="git rsync dkms build-essential bc libelf-dev aircrack-ng hostapd dnsmasq iw rfkill iproute2 iptables wireless-tools python3 python3-pip network-manager nmap zram-tools"
-run_logged apt-get install -y $DEPENDENCIES || { log "[-] Failed to install dependencies. See $SETUP_LOG"; exit 1; }
+DEPENDENCIES=(git rsync dkms build-essential bc libelf-dev aircrack-ng hostapd dnsmasq iw rfkill iproute2 iptables wireless-tools python3 python3-pip network-manager nmap zram-tools)
+run_logged apt-get install -y "${DEPENDENCIES[@]}" || { log "[-] Failed to install dependencies. See $SETUP_LOG"; exit 1; }
 
 PYTHONDONTWRITEBYTECODE=1 python3 "$INSTALL_DIR/$SRC_ENTRY" -db >>"$SETUP_LOG" 2>&1 || log "[!] Database initialization/status check reported a warning. Run ghostlink -db for details."
 set_runtime_permissions

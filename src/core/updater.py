@@ -37,11 +37,11 @@ def update_ghostlink():
     if not os.path.exists(os.path.join(INSTALL_DIR, "setup.sh")):
         return {"status": "error", "message": f"Missing setup.sh in {INSTALL_DIR}."}
 
-    out, code = _run(["git", "fetch", "origin"])
+    out, code = _run(_sudo_args(["git", "fetch", "origin"]))
     if code != 0:
         return {"status": "error", "message": "Failed to fetch from remote.", "log": out}
 
-    out, code = _run(["git", "pull", "origin", "main"])
+    out, code = _run(_sudo_args(["git", "pull", "origin", "main"]))
     if code != 0:
         return {"status": "error", "message": "Failed to pull latest changes.", "log": out}
 

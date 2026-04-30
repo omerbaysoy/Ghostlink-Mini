@@ -1,7 +1,5 @@
 import os
 import subprocess
-import time
-import re
 import shlex
 import xml.etree.ElementTree as ET
 from datetime import datetime
@@ -62,16 +60,16 @@ def run_nmap_scan(scan_type, target, override_large=False, override_auth=False):
     sudo = "sudo " if not is_root else ""
     
     cmd_map = {
-        "discovery": f"nmap -sn",
+        "discovery": "nmap -sn",
         "arp": f"{sudo}nmap -PR -sn",
-        "quick": f"nmap -F",
-        "ports": f"{sudo}nmap -sS --top-ports 1000" if is_root else f"nmap -sT --top-ports 1000",
+        "quick": "nmap -F",
+        "ports": f"{sudo}nmap -sS --top-ports 1000" if is_root else "nmap -sT --top-ports 1000",
         "full": f"{sudo}nmap -sS -p- --min-rate 1000",
-        "services": f"nmap -sV -sC",
+        "services": "nmap -sV -sC",
         "os": f"{sudo}nmap -O",
         "udp-top": f"{sudo}nmap -sU --top-ports 50",
-        "traceroute": f"nmap --traceroute",
-        "safe-scripts": f"nmap --script default,safe"
+        "traceroute": "nmap --traceroute",
+        "safe-scripts": "nmap --script default,safe"
     }
     
     base_cmd = cmd_map.get(scan_type)

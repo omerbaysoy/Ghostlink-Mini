@@ -76,7 +76,7 @@ def print_status_overview():
 
 def cmd_status():
     print_banner()
-    adapters = print_status_overview()
+    print_status_overview()
     print("--- Detailed Status ---")
     print(f"DHCP/NAT Status: {'Active' if is_ghostlink_ap_running() else 'Inactive'}")
     creds = get_credentials()
@@ -358,7 +358,7 @@ def cmd_diag():
     print(f"Active Default Route: {get_default_route_iface()}")
     
     adapters = detect_adapters()
-    print(f"\nAdapter Map:")
+    print("\nAdapter Map:")
     for role, iface in adapters.items():
         print(f"- {role}: {iface if iface else 'Missing'}")
         if iface:
@@ -378,11 +378,11 @@ def cmd_diag():
             print(f"  - Loaded modules: {', '.join(loaded_mods) if loaded_mods else 'None'}")
             
             dkms_out, _ = run_cmd_no_check("dkms status")
-            print(f"  - DKMS Status:\n      " + "\n      ".join(dkms_out.splitlines() if dkms_out else ["None"]))
+            print("  - DKMS Status:\n      " + "\n      ".join(dkms_out.splitlines() if dkms_out else ["None"]))
             
             dmesg_out, _ = run_cmd_no_check("dmesg | egrep -i '8812|0bda:8812|88XXau' | tail -n 5")
             if dmesg_out:
-                print(f"  - dmesg hint:\n      " + "\n      ".join(dmesg_out.splitlines()))
+                print("  - dmesg hint:\n      " + "\n      ".join(dmesg_out.splitlines()))
                 
             print("  - Next action: Try 'sudo modprobe 88XXau' or 'sudo modprobe 8812au'. Replug adapter. Consider 'sudo ./setup.sh --update'.")
             
