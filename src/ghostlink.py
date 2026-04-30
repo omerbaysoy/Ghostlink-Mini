@@ -498,10 +498,17 @@ def cmd_network_scan(args_target=None, args_type=None, args_last=False, args_lis
         print("2. quick")
         print("3. services")
         print("4. full")
-        t_choice = input("Select type (name): ")
-        args_type = t_choice.strip()
-        if not args_type:
+        t_choice = input("Select type (1-4 or name): ").strip()
+        if not t_choice:
             return
+            
+        type_map = {
+            "1": "discovery",
+            "2": "quick",
+            "3": "services",
+            "4": "full"
+        }
+        args_type = type_map.get(t_choice, t_choice)
             
     override_auth = False
     override_large = False

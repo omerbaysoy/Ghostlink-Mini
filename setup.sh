@@ -240,6 +240,22 @@ install_airgeddon() {
     ln -sf /opt/airgeddon/airgeddon.sh /usr/local/bin/airgeddon
 }
 
+install_wifite2() {
+    log "[+] Installing latest Wifite2 from source (kimocoder/wifite2)..."
+    if command -v wifite >/dev/null 2>&1; then
+        run_logged apt-get remove -y wifite || true
+    fi
+    if [ -d /opt/wifite2/.git ]; then
+        run_logged git -C /opt/wifite2 pull --ff-only || return 1
+    elif [ -e /opt/wifite2 ]; then
+        log "[-] /opt/wifite2 exists but is not a git checkout. Move it aside and rerun setup."
+        return 1
+    else
+        run_logged git clone https://github.com/kimocoder/wifite2.git /opt/wifite2 || return 1
+    fi
+    ln -sf /opt/wifite2/Wifite.py /usr/local/bin/wifite
+}
+
 kernel_headers_available() {
     local release
     release="$(uname -r)"
@@ -542,6 +558,19 @@ EOF
     fi
 }
 
+configure_rpi5_pcie() {
+    if [ -f /boot/firmware/config.txt ]; then
+        if ! grep -q "pciex1_gen=3" /boot/firmware/config.txt; then
+            log "[+] Enabling PCIe Gen 3 for M.2 SSD..."
+            cat >>/boot/firmware/config.txt <<'EOF'
+
+# Ghostlink-Mini: Enable PCIe Gen 3 for M.2 SSD speed boost
+dtparam=pciex1_gen=3
+EOF
+        fi
+    fi
+}
+
 echo "======================================"
 echo "    Ghostlink-Mini Setup Script"
 echo "======================================"
@@ -564,7 +593,7 @@ log "[+] Updating apt repositories..."
 run_logged apt-get update -y || { log "[-] Failed to update apt"; exit 1; }
 
 log "[+] Installing system dependencies..."
-DEPENDENCIES="git rsync dkms build-essential bc libelf-dev aircrack-ng hostapd dnsmasq iw rfkill iproute2 iptables wireless-tools python3 python3-pip wifite network-manager nmap zram-tools"
+DEPENDENCIES="git rsync dkms build-essential bc libelf-dev aircrack-ng hostapd dnsmasq iw rfkill iproute2 iptables wireless-tools python3 python3-pip network-manager nmap zram-tools"
 run_logged apt-get install -y $DEPENDENCIES || { log "[-] Failed to install dependencies. See $SETUP_LOG"; exit 1; }
 
 PYTHONDONTWRITEBYTECODE=1 python3 "$INSTALL_DIR/$SRC_ENTRY" -db >>"$SETUP_LOG" 2>&1 || log "[!] Database initialization/status check reported a warning. Run ghostlink -db for details."
@@ -575,6 +604,7 @@ log "--- Kernel Headers ---"
 install_kernel_headers || exit 1
 
 install_airgeddon || { log "[-] Failed to install Airgeddon. See $SETUP_LOG"; exit 1; }
+install_wifite2 || { log "[-] Failed to install Wifite2. See $SETUP_LOG"; exit 1; }
 
 configure_management_wifi || log "[!] Management Wi-Fi configuration was skipped or failed; existing network state was left alone."
 
@@ -590,6 +620,7 @@ echo ""
 log "--- System Optimizations ---"
 configure_zram
 configure_rpi5_fan
+configure_rpi5_pcie
 
 echo ""
 log "--- Verification ---"
