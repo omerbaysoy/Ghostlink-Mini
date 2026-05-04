@@ -36,6 +36,8 @@ Setup installs:
 - MT7612U in-kernel mt76 module check and firmware (`firmware-misc-nonfree`)
 - Wifite2, Airgeddon, aircrack-ng, nmap, and other toolchain dependencies
 
+> **Note:** Setup prepares all supported driver paths even when adapters are not plugged in. Adapter detection is only used at runtime for role mapping. You can run setup before connecting any USB adapters.
+
 ## Running the Tool
 
 Interactive CLI menu:

@@ -413,6 +413,7 @@ CONF
             run_logged modprobe 88XXau || true
             if module_available 88XXau; then
                 log "[+] RTL8812AU pentest driver installed successfully as module 88XXau."
+                log "[+] RTL8812AU driver path prepared. Plug in RTL8812AU adapter to activate."
                 return 0
             fi
         fi
@@ -444,12 +445,14 @@ CONF
             run_logged modprobe 8812au || true
             if module_available 8812au; then
                 log "[+] RTL8812AU fallback driver installed successfully (morrownr/8812au)."
+                log "[+] RTL8812AU driver path prepared. Plug in RTL8812AU adapter to activate."
                 return 0
             fi
         fi
     fi
 
     log "[!] Both pentest/fallback drivers failed. Falling back to rtw88/rtl8xxxu kernel modules."
+    log "[!] RTL8812AU driver path could not be fully prepared. Run 'sudo ./setup.sh --update' after resolving kernel headers."
     return 1
 }
 
@@ -459,8 +462,8 @@ install_rtw88_driver() {
     local release dkms_name dkms_version
     release="$(uname -r)"
 
-    if rtl88x2bu_ready && rtl8812au_ready; then
-        log "[+] Driver rtw88/fallback modules are already available for RTL88x2BU and RTL8812AU."
+    if rtl88x2bu_ready; then
+        log "[+] RTL88x2BU driver module is already available. Skipping rtw88 install."
         return
     fi
 
@@ -499,10 +502,10 @@ install_rtw88_driver() {
         log "[-] rtw88 install completed, but RTL88x2BU module is not available."
         return 1
     }
-    rtl8812au_ready || {
-        log "[-] rtw88 install completed, but no RTL8812AU module is available."
-        return 1
-    }
+    if ! rtl8812au_ready; then
+        log "[!] Note: no RTL8812AU module visible via rtw88 fallback. This is expected when 88XXau is the primary driver."
+    fi
+    log "[+] RTL88x2BU driver path prepared. Plug in RTL88x2BU adapter to activate."
 }
 
 install_rtl8188eus() {
@@ -527,7 +530,9 @@ install_rtl8188eus() {
     fi
 
     echo "blacklist r8188eu" >/etc/modprobe.d/ghostlink-realtek.conf
-    (cd /usr/src/rtl8188eus && make && make install && modprobe 8188eu) >>"$SETUP_LOG" 2>&1 || return 1
+    (cd /usr/src/rtl8188eus && make && make install) >>"$SETUP_LOG" 2>&1 || return 1
+    run_logged modprobe 8188eu || log "[!] modprobe 8188eu returned non-zero (normal if RTL8188EUS adapter is not plugged in yet)."
+    log "[+] RTL8188EUS driver path prepared. Plug in RTL8188EUS adapter to activate."
 }
 
 setup_mt7612u() {

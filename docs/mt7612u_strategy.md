@@ -73,6 +73,8 @@ Unlike the RTL8812AU, the MT7612U does **not** require a third-party DKMS driver
 
 This is intentional. The in-kernel driver is sufficient for monitor mode and packet injection on modern kernels.
 
+**Setup runs unconditionally.** The MT7612U setup step does not check whether a MT7612U adapter is physically plugged in. All driver path verification and firmware installation happens regardless of adapter presence. Adapter detection is only used at runtime for role mapping.
+
 ## No Conflict with RTL8812AU
 
 The MT7612U setup:
