@@ -4,6 +4,19 @@ from pathlib import Path
 
 # Base Paths
 GHOSTLINK_DIR = "/etc/ghostlink"
+
+# Known USB vendor:product IDs for adapter identification
+RTL8812AU_USB_IDS = frozenset({"0bda:8812"})
+RTL88X2BU_USB_IDS = frozenset({"0bda:b812"})
+RTL8188EUS_USB_IDS = frozenset({"2357:010c"})
+MT7612U_USB_IDS = frozenset({
+    "0e8d:7612",   # MediaTek MT7612U reference design (Alfa AWUS036ACM, etc.)
+    "0e8d:761a",   # MediaTek MT7662U (uses same mt76x2u driver)
+    "2001:3a02",   # D-Link DWA-182 rev D
+    "0b05:17d1",   # ASUS USB-AC55
+    "148f:7612",   # Ralink/MediaTek MT7612U OEM
+    "13b1:003e",   # Linksys WUSB6300 v2
+})
 GHOSTLINK_LIB_DIR = "/var/lib/ghostlink"
 GHOSTLINK_LOG_DIR = "/var/log/ghostlink"
 

@@ -3,7 +3,10 @@ import os
 import time
 import json
 import shlex
-from .config import GHOSTLINK_LOG_DIR, load_adapter_map, save_adapter_map
+from .config import (
+    GHOSTLINK_LOG_DIR, load_adapter_map, save_adapter_map,
+    RTL8812AU_USB_IDS, RTL88X2BU_USB_IDS, RTL8188EUS_USB_IDS, MT7612U_USB_IDS,
+)
 
 RUNTIME_DIR = "/run/ghostlink"
 HOSTAPD_CONF = os.path.join(RUNTIME_DIR, "hostapd.conf")
@@ -114,6 +117,13 @@ def get_usb_id(iface):
             
     return None
 
+def mt7612u_usb_present():
+    for usb_id in MT7612U_USB_IDS:
+        out, code = run_cmd_no_check(f"lsusb -d {usb_id}")
+        if code == 0 and out.strip():
+            return True
+    return False
+
 def get_default_route_iface():
     for cmd in ["ip route get 1.1.1.1", "ip route show default"]:
         out, code = run_cmd_no_check(cmd)
@@ -154,10 +164,11 @@ def detect_adapters():
     adapters = {
         "management": None,
         "rtl8812au": None,
+        "mt7612u": None,
         "rtl88x2bu": None,
-        "rtl8188eus": None
+        "rtl8188eus": None,
     }
-    
+
     saved_map = load_adapter_map()
     saved_management = saved_map.get("management")
     if saved_management and interface_exists(saved_management):
@@ -166,31 +177,36 @@ def detect_adapters():
     default_iface = get_default_route_iface()
     if default_iface and interface_exists(default_iface):
         adapters["management"] = default_iface
-    
+
     for iface in ifaces:
         driver = get_driver(iface)
         usb_id = get_usb_id(iface)
         modalias = get_modalias(iface).lower()
-        
-        if usb_id == "0bda:8812":
+
+        if usb_id in RTL8812AU_USB_IDS:
             adapters["rtl8812au"] = iface
-        elif usb_id == "0bda:b812":
+        elif usb_id in RTL88X2BU_USB_IDS:
             adapters["rtl88x2bu"] = iface
-        elif usb_id == "2357:010c":
+        elif usb_id in RTL8188EUS_USB_IDS:
             adapters["rtl8188eus"] = iface
+        elif usb_id in MT7612U_USB_IDS:
+            adapters["mt7612u"] = iface
         elif driver in ["8812au", "88XXau", "rtw_8812au", "rtw88_8812au"] and not adapters["rtl8812au"]:
             adapters["rtl8812au"] = iface
         elif driver in ["88x2bu", "rtw_8822bu", "rtw88_8822bu"] and not adapters["rtl88x2bu"]:
             adapters["rtl88x2bu"] = iface
         elif (driver in ["r8188eu", "8188eu"] or (driver == "rtl8xxxu" and any(chip in modalias for chip in ["v2357p010c", "v0bdap8179"]))) and not adapters["rtl8188eus"]:
             adapters["rtl8188eus"] = iface
-        elif driver in ["brcmfmac", "brcmsmac"]: # Onboard pi wifi usually uses broadcom
+        elif driver in ["mt76x2u", "mt76usb"] and not adapters["mt7612u"]:
+            adapters["mt7612u"] = iface
+        elif driver in ["brcmfmac", "brcmsmac"]:
             if not adapters["management"]:
                 adapters["management"] = iface
 
     if not adapters["management"]:
+        assigned = {adapters["rtl8812au"], adapters["mt7612u"], adapters["rtl88x2bu"], adapters["rtl8188eus"]}
         for iface in _nm_active_wifi_interfaces():
-            if iface in ifaces and iface not in [adapters["rtl8812au"], adapters["rtl88x2bu"], adapters["rtl8188eus"]]:
+            if iface in ifaces and iface not in assigned:
                 adapters["management"] = iface
                 break
 

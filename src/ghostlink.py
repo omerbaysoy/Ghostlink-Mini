@@ -13,7 +13,8 @@ from core.network import (
     detect_adapters, get_management_ip, scan_networks, connect_network,
     check_internet, start_ap, stop_ap, restart_networking, run_cmd_no_check,
     is_ghostlink_ap_running, interface_exists, get_connected_ssid,
-    is_wireless_interface, get_driver, get_operstate, get_default_route_iface
+    is_wireless_interface, get_driver, get_operstate, get_default_route_iface,
+    mt7612u_usb_present,
 )
 from core.pentest import start_pentest, check_monitor_mode
 from core.updater import update_ghostlink
@@ -33,19 +34,16 @@ def print_status_overview():
     adapters = detect_adapters()
     mgmt_iface = adapters.get("management")
     rtl8812au_iface = adapters.get("rtl8812au")
+    mt7612u_iface = adapters.get("mt7612u")
     rtl88x2bu_iface = adapters.get("rtl88x2bu")
     rtl8188eus_iface = adapters.get("rtl8188eus")
-    
+
     mgmt_ip = get_management_ip(mgmt_iface) if mgmt_iface else "Not found"
-    # Get current mgmt SSID
     mgmt_ssid = "Unknown"
     if mgmt_iface:
         mgmt_ssid = get_connected_ssid(mgmt_iface)
-            
-    # Check internet via RTL8812AU (or generally)
+
     internet_status = "Connected" if check_internet() else "Disconnected"
-    
-    # Check AP status
     ap_status = "Active" if is_ghostlink_ap_running() else "Inactive"
 
     rtl8812au_status = 'Missing (USB Not Found)'
@@ -55,23 +53,30 @@ def print_status_overview():
         out, code = run_cmd_no_check("lsusb -d 0bda:8812")
         if code == 0 and out.strip():
             rtl8812au_status = 'Missing (USB Present, No Interface)'
-            
+
+    mt7612u_status = 'Missing (USB Not Found)'
+    if mt7612u_iface:
+        mt7612u_status = f"{mt7612u_iface} ({get_driver(mt7612u_iface)}, ready)"
+    elif mt7612u_usb_present():
+        mt7612u_status = 'Missing (USB Present, No Interface)'
+
     rtl88x2bu_status = 'Missing'
     if rtl88x2bu_iface:
         rtl88x2bu_status = f"{rtl88x2bu_iface} ({get_driver(rtl88x2bu_iface)})"
-        
+
     rtl8188eus_status = 'Missing'
     if rtl8188eus_iface:
         rtl8188eus_status = f"{rtl8188eus_iface} ({get_driver(rtl8188eus_iface)})"
 
-    print(f"\n[+] Management Network: {mgmt_ssid}")
-    print(f"[+] Management Interface: {mgmt_iface}")
-    print(f"[+] Management IP: {mgmt_ip}")
-    print(f"[-] RTL8812AU Status: {rtl8812au_status}")
-    print(f"[-] RTL88x2BU Status: {rtl88x2bu_status}")
-    print(f"[-] RTL8188EUS Status: {rtl8188eus_status}")
-    print(f"[-] Ghostlink-AP Status: {ap_status}")
-    print(f"[-] Internet Uplink: {internet_status}\n")
+    print(f"\n[+] Management Network:    {mgmt_ssid}")
+    print(f"[+] Management Interface:  {mgmt_iface}")
+    print(f"[+] Management IP:         {mgmt_ip}")
+    print(f"[-] RTL8812AU Status:      {rtl8812au_status}")
+    print(f"[-] MT7612U Status:        {mt7612u_status}")
+    print(f"[-] RTL88x2BU Status:      {rtl88x2bu_status}")
+    print(f"[-] RTL8188EUS Status:     {rtl8188eus_status}")
+    print(f"[-] Ghostlink-AP Status:   {ap_status}")
+    print(f"[-] Internet Uplink:       {internet_status}\n")
     return adapters
 
 def cmd_status():
@@ -124,17 +129,20 @@ def cmd_scan(iface=None):
     adapters = detect_adapters()
     candidates = [iface] if iface else [
         adapters.get("rtl8812au"),
+        adapters.get("mt7612u"),
         adapters.get("rtl8188eus"),
         adapters.get("rtl88x2bu"),
     ]
     candidates = [i for i in candidates if i]
-    
+
     if not candidates:
         print("Error: No suitable adapter found for scanning.")
         if not adapters.get("rtl8812au"):
             out, code = run_cmd_no_check("lsusb -d 0bda:8812")
             if code == 0 and out.strip():
                 print("Warning: RTL8812AU is physically connected but has no wireless interface. Check 'ghostlink -diag'.")
+        if not adapters.get("mt7612u") and mt7612u_usb_present():
+            print("Warning: MT7612U is physically connected but has no wireless interface. Check 'ghostlink -diag'.")
         return
 
     networks = []
@@ -202,14 +210,19 @@ def _find_target_network(iface, ssid, bssid=None):
 def cmd_pentest(ssid, iface=None, bssid=None):
     adapters = detect_adapters()
     if not iface:
-        iface = adapters.get("rtl8812au") or adapters.get("rtl8188eus") or adapters.get("rtl88x2bu")
-        
+        iface = (adapters.get("rtl8812au") or
+                 adapters.get("mt7612u") or
+                 adapters.get("rtl8188eus") or
+                 adapters.get("rtl88x2bu"))
+
     if not iface:
         print("Error: No suitable adapter found for pentest.")
         if not adapters.get("rtl8812au"):
             out, code = run_cmd_no_check("lsusb -d 0bda:8812")
             if code == 0 and out.strip():
                 print("Warning: RTL8812AU is physically connected but has no wireless interface. Check 'ghostlink -diag'.")
+        if not adapters.get("mt7612u") and mt7612u_usb_present():
+            print("Warning: MT7612U is physically connected but has no wireless interface. Check 'ghostlink -diag'.")
         return
     if not interface_exists(iface):
         print(f"Error: Interface {iface} does not exist.")
@@ -217,7 +230,7 @@ def cmd_pentest(ssid, iface=None, bssid=None):
     if not is_wireless_interface(iface):
         print(f"Error: Interface {iface} is not a wireless interface.")
         return
-        
+
     if iface == adapters.get("management"):
         print(f"Error: Interface {iface} is configured for management. Pentesting is blocked on this interface.")
         return
@@ -228,9 +241,15 @@ def cmd_pentest(ssid, iface=None, bssid=None):
         print(f"Error: Interface {iface} does not advertise monitor mode support.")
         return
     driver = get_driver(iface)
-    if driver.startswith("rtw"):
-        print(f"Warning: {iface} uses {driver}. Monitor mode is available, but injection/deauth quality depends on kernel driver support.")
-        
+    if driver == "88XXau":
+        print(f"[+] {iface} uses {driver} (primary Realtek pentest driver; full injection support).")
+    elif driver == "8812au":
+        print(f"[+] {iface} uses {driver} (RTL8812AU fallback driver; uplink OK, injection may vary).")
+    elif driver in ["mt76x2u", "mt76usb"]:
+        print(f"[+] {iface} uses {driver} (MediaTek mt76 main pentest driver).")
+    elif driver.startswith("rtw"):
+        print(f"Warning: {iface} uses {driver}. Monitor mode available, but injection/deauth quality depends on kernel driver support.")
+
     print(f"Preparing to attack '{ssid}' using {iface}...")
     confirm = input("This tool is for authorized/lab use only. Confirm target is authorized? (y/n): ")
     if confirm.lower() != 'y':
@@ -261,9 +280,9 @@ def cmd_pentest(ssid, iface=None, bssid=None):
             print(f"Warning: credentials were not saved: {e}")
         
         # Post-success flow
-        conn = input(f"Do you want to connect RTL8812AU to '{ssid}' now? (y/n): ")
+        conn = input(f"Do you want to connect {iface} to '{ssid}' now? (y/n): ")
         if conn.lower() == 'y':
-            do_connect(ssid, result["password"])
+            do_connect(ssid, result["password"], iface)
             ap = input("Do you want to start Ghostlink-AP now? (y/n): ")
             if ap.lower() == 'y':
                 cmd_ap_start()
@@ -275,11 +294,12 @@ def cmd_pentest(ssid, iface=None, bssid=None):
         except RuntimeError as e:
             print(f"Warning: pentest result was not saved: {e}")
 
-def do_connect(ssid, password):
+def do_connect(ssid, password, iface=None):
     adapters = detect_adapters()
-    iface = adapters.get("rtl8812au")
     if not iface:
-        print("Error: RTL8812AU is not connected or detected.")
+        iface = adapters.get("rtl8812au") or adapters.get("mt7612u")
+    if not iface:
+        print("Error: No uplink adapter (RTL8812AU or MT7612U) detected.")
         return
     
     print(f"Connecting {iface} to {ssid}...")
@@ -316,13 +336,13 @@ def cmd_connect():
 def cmd_ap_start():
     adapters = detect_adapters()
     ap_iface = adapters.get("rtl88x2bu")
-    uplink_iface = adapters.get("rtl8812au")
-    
+    uplink_iface = adapters.get("rtl8812au") or adapters.get("mt7612u")
+
     if not ap_iface:
         print("Error: RTL88x2BU adapter not detected for AP.")
         return
     if not uplink_iface:
-        print("Error: RTL8812AU uplink adapter not detected.")
+        print("Error: No uplink adapter (RTL8812AU or MT7612U) detected.")
         return
         
     print(f"Starting Ghostlink-AP on {ap_iface} shared via {uplink_iface}...")
@@ -339,7 +359,7 @@ def cmd_ap_start():
 def cmd_ap_stop():
     adapters = detect_adapters()
     ap_iface = adapters.get("rtl88x2bu")
-    uplink_iface = adapters.get("rtl8812au")
+    uplink_iface = adapters.get("rtl8812au") or adapters.get("mt7612u")
     if not ap_iface or not uplink_iface:
         print("Cannot determine live interfaces. Stopping Ghostlink-created AP state only...")
         if not stop_ap(ap_iface, uplink_iface):
@@ -372,19 +392,35 @@ def cmd_diag():
             print("\n[!] WARNING: RTL8812AU USB device present but no network interface is bound")
             print("  - USB ID: 0bda:8812")
             print("  - Candidate modules: 88XXau, 8812au, rtw_8812au")
-            
-            lsmod_out, _ = run_cmd_no_check("lsmod | egrep '8812|88XXau'")
+
+            lsmod_out, _ = run_cmd_no_check("lsmod | grep -E '8812|88XXau'")
             loaded_mods = [line.split()[0] for line in lsmod_out.splitlines() if line.strip()]
             print(f"  - Loaded modules: {', '.join(loaded_mods) if loaded_mods else 'None'}")
-            
+
             dkms_out, _ = run_cmd_no_check("dkms status")
             print("  - DKMS Status:\n      " + "\n      ".join(dkms_out.splitlines() if dkms_out else ["None"]))
-            
-            dmesg_out, _ = run_cmd_no_check("dmesg | egrep -i '8812|0bda:8812|88XXau' | tail -n 5")
+
+            dmesg_out, _ = run_cmd_no_check("dmesg | grep -Ei '8812|0bda:8812|88XXau' | tail -n 5")
             if dmesg_out:
                 print("  - dmesg hint:\n      " + "\n      ".join(dmesg_out.splitlines()))
-                
+
             print("  - Next action: Try 'sudo modprobe 88XXau' or 'sudo modprobe 8812au'. Replug adapter. Consider 'sudo ./setup.sh --update'.")
+
+    if not adapters.get("mt7612u") and mt7612u_usb_present():
+        print("\n[!] WARNING: MT7612U USB device present but no network interface is bound")
+        print("  - Candidate modules: mt76x2u, mt76usb")
+
+        lsmod_out, _ = run_cmd_no_check("lsmod | grep mt76")
+        loaded_mods = [line.split()[0] for line in lsmod_out.splitlines() if line.strip()]
+        print(f"  - Loaded mt76 modules: {', '.join(loaded_mods) if loaded_mods else 'None'}")
+
+        mi_out, mi_code = run_cmd_no_check("modinfo mt76x2u")
+        if mi_code == 0:
+            print("  - mt76x2u: Available in kernel")
+            print("  - Next action: Try 'sudo modprobe mt76x2u'. Replug adapter.")
+        else:
+            print("  - mt76x2u: Not available in this kernel build")
+            print("  - Next action: Check 'sudo apt-get install firmware-misc-nonfree'. Replug adapter.")
             
     print("\nDependencies:")
     for tool in ['wifite', 'airgeddon', 'aircrack-ng', 'hostapd', 'dnsmasq', 'iw', 'nmcli', 'nmap']:
@@ -402,7 +438,7 @@ def cmd_diag():
             print(f"- {tool}: Missing")
 
     print("\nDriver Modules:")
-    for module in ['88XXau', 'rtw_8812au', 'rtw88_8812au', 'rtw_8822bu', 'rtw88_8822bu', '8188eu', 'rtl8xxxu', 'brcmfmac']:
+    for module in ['88XXau', 'rtw_8812au', 'rtw88_8812au', 'mt76x2u', 'mt76_usb', 'mt76', 'rtw_8822bu', 'rtw88_8822bu', '8188eu', 'rtl8xxxu', 'brcmfmac']:
         _, code = run_cmd_no_check(f"modinfo {shlex.quote(module)}")
         print(f"- {module}: {'Available' if code == 0 else 'Missing'}")
         
@@ -533,9 +569,9 @@ def interactive_menu():
             
             print("1. Status")
             print("2. Scan Wi-Fi networks")
-            print("3. Start pentest with RTL8812AU")
+            print("3. Start pentest")
             print("4. Show saved credentials")
-            print("5. Connect RTL8812AU to saved network")
+            print("5. Connect to saved network")
             print("6. Start Ghostlink-AP on RTL88x2BU")
             print("7. Stop Ghostlink-AP")
             print("8. Network Scan")

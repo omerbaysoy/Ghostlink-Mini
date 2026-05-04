@@ -530,6 +530,33 @@ install_rtl8188eus() {
     (cd /usr/src/rtl8188eus && make && make install && modprobe 8188eu) >>"$SETUP_LOG" 2>&1 || return 1
 }
 
+setup_mt7612u() {
+    log "[+] Checking MT7612U (MediaTek mt76 in-kernel stack) support..."
+
+    if modinfo mt76x2u >/dev/null 2>&1; then
+        log "[+] mt76x2u module is available in this kernel."
+        log "[+] Loading mt76x2u..."
+        run_logged modprobe mt76x2u || log "[!] modprobe mt76x2u returned non-zero (normal if no MT7612U device is plugged in yet)."
+    else
+        log "[!] mt76x2u is not available in this kernel build. MT7612U will not get a wireless interface."
+    fi
+
+    if apt_package_available firmware-misc-nonfree; then
+        if dpkg -l firmware-misc-nonfree 2>/dev/null | grep -q "^ii"; then
+            log "[+] firmware-misc-nonfree is already installed (MT7612U firmware covered)."
+        else
+            log "[+] Installing firmware-misc-nonfree for MT7612U firmware support..."
+            run_logged apt-get install -y firmware-misc-nonfree || log "[!] Could not install firmware-misc-nonfree. MT7612U firmware may be missing."
+        fi
+    else
+        log "[!] firmware-misc-nonfree is not available from apt on this system."
+        log "[!] If MT7612U shows no interface after plug-in, check: dmesg | grep mt76 and lsmod | grep mt76"
+    fi
+
+    log "[+] MT7612U check complete. Plug in MT7612U adapter if not already connected, then run 'ghostlink -diag'."
+    return 0
+}
+
 configure_zram() {
     log "[+] Configuring 2GB ZRAM..."
     cat >/etc/default/zramswap <<'EOF'
@@ -615,6 +642,7 @@ remove_dkms_module_versions rtl88x2bu
 install_rtl8812au_pentest_driver || log "[!] RTL8812AU pentest driver failed; rtw88 fallback will be used if available."
 install_rtw88_driver || { log "[-] Required RTL88x2BU rtw88 driver install failed. See $SETUP_LOG"; exit 1; }
 install_rtl8188eus || log "[!] Optional backup driver RTL8188EUS failed. Continuing; see $SETUP_LOG"
+setup_mt7612u || log "[!] MT7612U setup had warnings. MT7612U may not function until firmware/modules are resolved. See $SETUP_LOG"
 
 echo ""
 log "--- System Optimizations ---"
