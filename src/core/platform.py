@@ -202,7 +202,11 @@ def get_gpu_memory_status(platform_info=None):
     info = platform_info or detect_platform()
     profile = info["profile"]
     if not is_raspberry_pi_profile(profile):
-        return "Not applicable on generic Debian SBC"
+        return "Skipped (generic Debian SBC)"
+    if profile == "rpi_5":
+        return "Skipped / firmware-managed on Raspberry Pi 5"
+    if profile == "unknown_rpi":
+        return "Skipped (unknown Raspberry Pi profile)"
 
     path, values = _boot_config_values()
     target = info.get("gpu_mem_mb")

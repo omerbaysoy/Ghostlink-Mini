@@ -6,17 +6,18 @@ Ghostlink-Mini is a Raspberry Pi / Debian SBC CLI tool for authorized/lab Wi-Fi 
 
 Chapter 1 targets:
 
-| Platform | Profile | Status |
-|---|---|---|
-| Raspberry Pi Zero W | `rpi_zero_w` | tested/owned |
-| Raspberry Pi Zero 2 W | `rpi_zero_2_w` | tested/owned |
-| Raspberry Pi 3B | `rpi_3b` | tested/owned |
-| Raspberry Pi 5 | `rpi_5` | tested/owned |
-| Raspberry Pi 1 | `rpi_1` | supported/untested |
-| Raspberry Pi 2 | `rpi_2` | supported/untested |
-| Raspberry Pi 3B+ | `rpi_3b_plus` | supported/untested |
-| Raspberry Pi 4 | `rpi_4` | supported/untested |
-| Generic Debian-based Linux SBC | `debian_sbc` | best-effort |
+| Platform | Profile | Status | GPU Memory Policy |
+|---|---|---|---|
+| Raspberry Pi Zero W | `rpi_zero_w` | tested/owned | 16MB headless floor |
+| Raspberry Pi Zero 2 W | `rpi_zero_2_w` | tested/owned | 16MB headless floor |
+| Raspberry Pi 3B | `rpi_3b` | tested/owned | 16MB headless floor |
+| Raspberry Pi 5 | `rpi_5` | tested/owned | Skipped / firmware-managed |
+| Raspberry Pi 1 | `rpi_1` | supported/untested | 16MB headless floor |
+| Raspberry Pi 2 | `rpi_2` | supported/untested | 16MB headless floor |
+| Raspberry Pi 3B+ | `rpi_3b_plus` | supported/untested | 16MB headless floor |
+| Raspberry Pi 4 | `rpi_4` | supported/untested | 16MB headless floor |
+| Unknown Raspberry Pi | `unknown_rpi` | supported/untested | Skipped |
+| Generic Debian-based Linux SBC | `debian_sbc` | best-effort | Skipped |
 
 Target OS images:
 
@@ -66,7 +67,9 @@ Setup installs and prepares all supported driver paths even when the adapters ar
 Setup also detects the platform profile and applies only compatible system tuning:
 
 - Profile-aware ZRAM sizing
-- Raspberry Pi GPU memory floor where a Pi boot config exists
+- Raspberry Pi `gpu_mem=16` only on exact older Pi profiles where this is safe for headless operation
+- Raspberry Pi 5 GPU memory is skipped because it is firmware-managed/dynamic
+- Existing user `gpu_mem` settings are preserved
 - Safe default Raspberry Pi CPU profile where supported and no user overclock already exists
 - Raspberry Pi filesystem expansion through `raspi-config nonint do_expand_rootfs` when available
 - Pi 5 fan and PCIe tuning only on `rpi_5`

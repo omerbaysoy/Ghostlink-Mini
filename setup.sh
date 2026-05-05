@@ -171,7 +171,7 @@ set_platform_profile_defaults() {
             PLATFORM_LABEL="Raspberry Pi 4"
             PLATFORM_SUPPORT="supported/untested"
             PLATFORM_ZRAM_MB=2048
-            PLATFORM_GPU_MEM_MB=32
+            PLATFORM_GPU_MEM_MB=16
             PLATFORM_OC_SUMMARY="not applied by default"
             PLATFORM_NOTES="supported but not owned/tested for Chapter 1."
             ;;
@@ -179,15 +179,15 @@ set_platform_profile_defaults() {
             PLATFORM_LABEL="Raspberry Pi 5"
             PLATFORM_SUPPORT="tested/owned"
             PLATFORM_ZRAM_MB=2048
-            PLATFORM_GPU_MEM_MB=32
+            PLATFORM_GPU_MEM_MB=""
             PLATFORM_OC_SUMMARY="safe mild profile: arm_freq=2600"
-            PLATFORM_NOTES="Pi 5-only fan and PCIe tuning may be applied by setup."
+            PLATFORM_NOTES="Pi 5-only fan and PCIe tuning may be applied by setup; gpu_mem is firmware-managed."
             ;;
         unknown_rpi)
             PLATFORM_LABEL="Unknown Raspberry Pi"
             PLATFORM_SUPPORT="supported/untested"
             PLATFORM_ZRAM_MB=1024
-            PLATFORM_GPU_MEM_MB=16
+            PLATFORM_GPU_MEM_MB=""
             PLATFORM_OC_SUMMARY="not applied by default"
             PLATFORM_NOTES="Raspberry Pi detected, but model did not match a named profile."
             ;;
@@ -285,10 +285,12 @@ log_platform_summary() {
     log "[+] Architecture: $PLATFORM_ARCH"
     log "[+] Kernel: $PLATFORM_KERNEL"
     log "[+] ZRAM target: ${PLATFORM_ZRAM_MB}MB"
-    if [ -n "$PLATFORM_GPU_MEM_MB" ]; then
+    if [ "$PLATFORM_PROFILE" = "rpi_5" ]; then
+        log "[+] GPU memory floor: skipped on Pi 5, firmware-managed"
+    elif [ -n "$PLATFORM_GPU_MEM_MB" ]; then
         log "[+] GPU memory floor: ${PLATFORM_GPU_MEM_MB}MB"
     else
-        log "[+] GPU memory floor: skipped for generic Debian SBC"
+        log "[+] GPU memory floor: skipped"
     fi
     log "[+] Overclock policy: $PLATFORM_OC_SUMMARY"
     log "[+] Notes: $PLATFORM_NOTES"
@@ -299,11 +301,11 @@ log_compatibility_matrix() {
     log "[+] rpi_zero_w: tested/owned | ZRAM 512MB | GPU 16MB | OC stock-safe | fan/storage N/A | drivers: all prepared"
     log "[+] rpi_zero_2_w: tested/owned | ZRAM 1024MB | GPU 16MB | OC arm_freq=1100 | fan/storage N/A | drivers: all prepared"
     log "[+] rpi_3b: tested/owned | ZRAM 1024MB | GPU 16MB | OC arm_freq=1300/core_freq=500 | fan/storage N/A | drivers: all prepared"
-    log "[+] rpi_5: tested/owned | ZRAM 2048MB | GPU 32MB | OC arm_freq=2600 | fan/PCIe gated to Pi 5 | drivers: all prepared"
+    log "[+] rpi_5: tested/owned | ZRAM 2048MB | GPU skipped/firmware-managed | OC arm_freq=2600 | fan/PCIe gated to Pi 5 | drivers: all prepared"
     log "[+] rpi_1: supported/untested | ZRAM 512MB | GPU 16MB | OC skipped | fan/storage N/A | drivers: best effort"
     log "[+] rpi_2: supported/untested | ZRAM 1024MB | GPU 16MB | OC skipped | fan/storage N/A | drivers: best effort"
     log "[+] rpi_3b_plus: supported/untested | ZRAM 1024MB | GPU 16MB | OC skipped | fan/storage N/A | drivers: best effort"
-    log "[+] rpi_4: supported/untested | ZRAM 2048MB | GPU 32MB | OC skipped | fan/storage N/A | drivers: best effort"
+    log "[+] rpi_4: supported/untested | ZRAM 2048MB | GPU 16MB | OC skipped | fan/storage N/A | drivers: best effort"
     log "[+] debian_sbc: best-effort | ZRAM 1024MB | Pi boot/GPU/OC/fan/PCIe skipped | drivers: all prepared when headers are available"
 }
 
@@ -889,6 +891,24 @@ boot_config_has_key() {
     grep -Eq "^[[:space:]]*${key}[[:space:]]*=" "$path" 2>/dev/null
 }
 
+boot_config_has_user_gpu_mem() {
+    local path="$1"
+    awk '
+        /^[[:space:]]*# Ghostlink-Mini: GPU memory floor/ {
+            ghostlink_gpu = 1
+            next
+        }
+        /^[[:space:]]*gpu_mem[[:space:]]*=/ {
+            if (ghostlink_gpu) {
+                ghostlink_gpu = 0
+                next
+            }
+            found = 1
+        }
+        END { exit found ? 0 : 1 }
+    ' "$path" 2>/dev/null
+}
+
 expand_rpi_filesystem() {
     if ! is_raspberry_pi; then
         log "[+] Skipping Raspberry Pi filesystem expansion on generic Debian SBC."
@@ -934,6 +954,10 @@ configure_rpi_gpu_memory() {
         log "[+] Skipping Raspberry Pi GPU memory tuning on generic Debian SBC."
         return
     fi
+    if [ "$PLATFORM_PROFILE" = "rpi_5" ]; then
+        log "[+] Raspberry Pi 5 detected; skipping gpu_mem because Pi 5 GPU memory is firmware-managed."
+        return
+    fi
     if [ -z "$PLATFORM_GPU_MEM_MB" ]; then
         log "[+] No GPU memory floor defined for $PLATFORM_PROFILE; skipping."
         return
@@ -944,8 +968,12 @@ configure_rpi_gpu_memory() {
         log "[!] Raspberry Pi boot config was not found; cannot set gpu_mem."
         return
     fi
+    if boot_config_has_user_gpu_mem "$config_path"; then
+        log "[+] Existing user gpu_mem setting found in $config_path; leaving user value unchanged."
+        return
+    fi
     if boot_config_has_key "$config_path" "gpu_mem"; then
-        log "[+] Existing gpu_mem setting found in $config_path; leaving user value unchanged."
+        log "[+] Existing Ghostlink-managed gpu_mem setting found in $config_path; leaving value unchanged."
         return
     fi
 
@@ -1094,8 +1122,12 @@ if [ "$DRY_RUN" -eq 1 ]; then
     if is_raspberry_pi; then
         _boot_cfg="$(boot_config_path)"
         echo "  Boot cfg : ${_boot_cfg:-not found}"
-        if [ -n "$PLATFORM_GPU_MEM_MB" ]; then
+        if [ "$PLATFORM_PROFILE" = "rpi_5" ]; then
+            echo "  GPU mem  : skipped on Pi 5, firmware-managed"
+        elif [ -n "$PLATFORM_GPU_MEM_MB" ]; then
             echo "  GPU mem  : ${PLATFORM_GPU_MEM_MB}MB floor"
+        else
+            echo "  GPU mem  : skipped"
         fi
         if [ "${GHOSTLINK_DISABLE_RPI_OC:-0}" = "1" ]; then
             echo "  OC       : disabled (GHOSTLINK_DISABLE_RPI_OC=1)"
@@ -1107,6 +1139,7 @@ if [ "$DRY_RUN" -eq 1 ]; then
             echo "  Pi 5 PCIe: Gen 3 will be enabled"
         fi
     else
+        echo "  GPU mem  : skipped"
         echo "  Pi-specific boot/fan/PCIe steps: skipped (not Raspberry Pi)"
     fi
     echo ""

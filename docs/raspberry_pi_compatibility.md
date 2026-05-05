@@ -9,12 +9,12 @@ This document describes the Chapter 1 platform compatibility layer for Ghostlink
 | Raspberry Pi Zero W | `rpi_zero_w` | tested/owned | 512 MB | 16 MB | Stock-safe baseline; no automatic CPU overclock | No Pi 5 fan/PCIe tuning | All supported driver paths are prepared when headers are available; external powered USB is recommended |
 | Raspberry Pi Zero 2 W | `rpi_zero_2_w` | tested/owned | 1024 MB | 16 MB | `arm_freq=1100` | No Pi 5 fan/PCIe tuning | All supported driver paths are prepared when headers are available |
 | Raspberry Pi 3B | `rpi_3b` | tested/owned | 1024 MB | 16 MB | `arm_freq=1300`, `core_freq=500`, `over_voltage=2` | No Pi 5 fan/PCIe tuning | All supported driver paths are prepared when headers are available |
-| Raspberry Pi 5 | `rpi_5` | tested/owned | 2048 MB | 32 MB | `arm_freq=2600` | Active Cooler thresholds and PCIe Gen 3 can be configured only on Pi 5 | All supported driver paths are prepared when headers are available |
+| Raspberry Pi 5 | `rpi_5` | tested/owned | 2048 MB | Skipped / firmware-managed | `arm_freq=2600` | Active Cooler thresholds and PCIe Gen 3 can be configured only on Pi 5 | All supported driver paths are prepared when headers are available |
 | Raspberry Pi 1 | `rpi_1` | supported/untested | 512 MB | 16 MB | Not applied by default | No Pi 5 fan/PCIe tuning | Best effort; external powered USB is strongly recommended |
 | Raspberry Pi 2 | `rpi_2` | supported/untested | 1024 MB | 16 MB | Not applied by default | No Pi 5 fan/PCIe tuning | Best effort |
 | Raspberry Pi 3B+ | `rpi_3b_plus` | supported/untested | 1024 MB | 16 MB | Not applied by default | No Pi 5 fan/PCIe tuning | Best effort; auto-OC is skipped |
-| Raspberry Pi 4 | `rpi_4` | supported/untested | 2048 MB | 32 MB | Not applied by default | No Pi 5 fan/PCIe tuning | Best effort |
-| Unknown Raspberry Pi | `unknown_rpi` | supported/untested | 1024 MB | 16 MB | Not applied by default | No Pi 5 fan/PCIe tuning | Best effort |
+| Raspberry Pi 4 | `rpi_4` | supported/untested | 2048 MB | 16 MB | Not applied by default | No Pi 5 fan/PCIe tuning | Best effort |
+| Unknown Raspberry Pi | `unknown_rpi` | supported/untested | 1024 MB | Skipped | Not applied by default | No Pi 5 fan/PCIe tuning | Best effort |
 | Generic Debian-based Linux SBC | `debian_sbc` | best-effort | 1024 MB | Skipped | Not applicable | Raspberry Pi boot config, fan, PCIe, and `raspi-config` steps are skipped | Driver preparation runs when Debian packages, headers, DKMS, and modules are available |
 
 ## Target OS Images
@@ -57,7 +57,9 @@ Setup remains adapter-presence independent. It prepares RTL8812AU, MT7612U, RTL8
 Raspberry Pi-specific behavior:
 
 - ZRAM size follows the detected profile.
-- GPU memory is set only when no existing `gpu_mem` value is present.
+- GPU memory is set to `gpu_mem=16` only on exact older Raspberry Pi profiles where this is safe for headless operation: Pi Zero W, Zero 2 W, Pi 1, Pi 2, Pi 3B, Pi 3B+, and Pi 4.
+- Ghostlink does not write `gpu_mem` on Raspberry Pi 5 because Pi 5 GPU memory is firmware-managed/dynamic.
+- Existing user `gpu_mem` values are preserved.
 - Default CPU profile is applied only on supported profiles and only when no user CPU/voltage setting exists.
 - Filesystem expansion is requested through `raspi-config nonint do_expand_rootfs` when `raspi-config` is available. On Raspberry Pi 5 with NVMe root, expansion is skipped automatically.
 - Ghostlink-managed boot config additions include `[all]` before Ghostlink lines so they are not appended inside a model-specific conditional section.
