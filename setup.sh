@@ -503,10 +503,10 @@ install_airgeddon() {
 
 install_wifite_latest() {
     # Install/update the latest maintained Wifite implementation system-wide.
-    # The current upstream maintained fork is kimocoder/wifite2; this function
-    # follows that source today but the policy is "latest maintained Wifite",
-    # not "Wifite2 only". The canonical user-facing command is `wifite`;
-    # `wifite2` is provided as a compatibility alias pointing to the same code.
+    # Current upstream is kimocoder/wifite2; the source path stays /opt/wifite2
+    # because that is the upstream repo name. The user-facing command is the
+    # single canonical name `wifite`. Ghostlink does NOT install a `wifite2`
+    # alias; any Ghostlink-managed legacy `wifite2` wrapper is removed here.
     log "[+] Installing latest maintained Wifite implementation system-wide..."
 
     # Remove any apt-installed wifite that may shadow our system-wide install
@@ -539,20 +539,17 @@ install_wifite_latest() {
         return 1
     fi
 
-    # Detect existing wrappers. Replace anything that is clearly Ghostlink-managed
-    # (i.e. references /opt/wifite2). Warn but do not stomp anything user-owned
-    # that points elsewhere.
-    for _path in /usr/local/bin/wifite /usr/local/bin/wifite2; do
-        if [ -e "$_path" ] || [ -L "$_path" ]; then
-            if [ -L "$_path" ] || grep -q "/opt/wifite2" "$_path" 2>/dev/null; then
-                rm -f "$_path"
-            else
-                log "[!] $_path exists and does not point to /opt/wifite2. Refusing to overwrite a non-Ghostlink wrapper."
-                log "[!] Inspect manually if you want Ghostlink to manage this wrapper."
-                continue
-            fi
+    # Replace any prior Ghostlink-managed canonical wrapper. Warn but do not
+    # stomp anything user-owned that points elsewhere.
+    if [ -e /usr/local/bin/wifite ] || [ -L /usr/local/bin/wifite ]; then
+        if [ -L /usr/local/bin/wifite ] || grep -q "/opt/wifite2" /usr/local/bin/wifite 2>/dev/null; then
+            rm -f /usr/local/bin/wifite
+        else
+            log "[!] /usr/local/bin/wifite exists and does not point to /opt/wifite2."
+            log "[!] Refusing to overwrite a non-Ghostlink wrapper. Inspect manually."
+            return 1
         fi
-    done
+    fi
 
     # Canonical wrapper: /usr/local/bin/wifite -> python3 <entry>
     cat > /usr/local/bin/wifite <<WIFITE_WRAPPER
@@ -561,10 +558,31 @@ exec python3 "$_wifite_entry" "\$@"
 WIFITE_WRAPPER
     chmod +x /usr/local/bin/wifite
 
-    # Compatibility alias /usr/local/bin/wifite2 -> /usr/local/bin/wifite
-    # (only created if we successfully installed the canonical wrapper)
-    if [ -x /usr/local/bin/wifite ]; then
-        ln -sf /usr/local/bin/wifite /usr/local/bin/wifite2
+    # Remove any Ghostlink-managed /usr/local/bin/wifite2 from prior versions.
+    # Removal conditions (any one is sufficient):
+    #   - it is a symlink to /usr/local/bin/wifite, OR
+    #   - it is a symlink whose target points into /opt/wifite2, OR
+    #   - it is a regular file whose contents reference /opt/wifite2.
+    # Otherwise it is treated as user-owned and preserved with a warning.
+    if [ -L /usr/local/bin/wifite2 ]; then
+        local _wifite2_target
+        _wifite2_target="$(readlink /usr/local/bin/wifite2 2>/dev/null || true)"
+        case "$_wifite2_target" in
+            /usr/local/bin/wifite|/opt/wifite2*|*/opt/wifite2*)
+                log "[+] Removing legacy Ghostlink-managed wifite2 alias (was: $_wifite2_target)..."
+                rm -f /usr/local/bin/wifite2
+                ;;
+            *)
+                log "[!] Warning: non-Ghostlink /usr/local/bin/wifite2 exists (-> $_wifite2_target); leaving untouched."
+                ;;
+        esac
+    elif [ -f /usr/local/bin/wifite2 ]; then
+        if grep -q "/opt/wifite2" /usr/local/bin/wifite2 2>/dev/null; then
+            log "[+] Removing legacy Ghostlink-managed wifite2 wrapper script..."
+            rm -f /usr/local/bin/wifite2
+        else
+            log "[!] Warning: non-Ghostlink /usr/local/bin/wifite2 exists; leaving untouched."
+        fi
     fi
 
     # Detect a clean version/source ref without parsing Wifite's banner art
@@ -580,8 +598,8 @@ WIFITE_WRAPPER
     if [ -n "$_wifite_ref" ]; then
         log "[+] Wifite git ref: $_wifite_ref"
     fi
-    log "[+] Wifite canonical command: /usr/local/bin/wifite (-> python3 $_wifite_entry)"
-    log "[+] Wifite compatibility alias: /usr/local/bin/wifite2 (-> /usr/local/bin/wifite)"
+    log "[+] Wifite command: /usr/local/bin/wifite"
+    log "[+] No wifite2 compatibility alias is installed by Ghostlink."
 }
 
 # Backwards-compatible alias for any callers (or external scripts) that still
@@ -592,7 +610,7 @@ install_wifite2() {
 
 verify_tools() {
     log "--- Tool Verification ---"
-    local _tool _path _wifite_path _wifite2_path
+    local _tool _path _wifite_path
     for _tool in nmap aircrack-ng hostapd dnsmasq iw nmcli tmux airgeddon \
                  tshark hashcat hcxdumptool hcxpcapngtool reaver bully cowpatty \
                  macchanger sensors; do
@@ -604,12 +622,13 @@ verify_tools() {
         fi
     done
     _wifite_path="$(command -v wifite 2>/dev/null || true)"
-    _wifite2_path="$(command -v wifite2 2>/dev/null || true)"
-    if [ -n "$_wifite_path" ] || [ -n "$_wifite2_path" ]; then
-        log "[+] wifite: ${_wifite_path:-not found}"
-        log "[+] wifite2: ${_wifite2_path:-not found}"
+    if [ -n "$_wifite_path" ]; then
+        log "[+] wifite: $_wifite_path"
     else
-        log "[!] wifite/wifite2: neither command is on PATH"
+        log "[!] wifite: not found in PATH"
+    fi
+    if [ -e /usr/local/bin/wifite2 ] || [ -L /usr/local/bin/wifite2 ]; then
+        log "[!] Note: /usr/local/bin/wifite2 still exists (legacy/non-Ghostlink wrapper)."
     fi
     if [ -z "${DISPLAY:-}" ] && [ -z "${WAYLAND_DISPLAY:-}" ]; then
         if command -v tmux >/dev/null 2>&1; then

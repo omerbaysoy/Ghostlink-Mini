@@ -69,14 +69,13 @@ Setup installs and prepares all supported driver paths even when the adapters ar
 
 System-wide tool installation (usable outside Ghostlink):
 
-**Wifite policy.** Ghostlink installs the **latest maintained Wifite implementation** rather than locking to a specific historical fork. The canonical user-facing command is `wifite`; `wifite2` is provided as a compatibility alias because some workflows still reference that name. Both wrappers point to the same code. Setup runs `apt update` and installs dependency packages (aircrack-ng, tshark, hashcat, hcxdumptool, hcxtools, reaver, bully, cowpatty, macchanger, etc.) at the latest version available from the configured Debian / Raspberry Pi OS repositories. Optional packages that are unavailable on the running distribution log a warning and continue; required base packages still fail loudly.
+**Wifite policy.** Ghostlink installs the **latest maintained Wifite implementation** rather than locking to a specific historical fork. The user-facing command is exactly one binary: **`wifite`**. Ghostlink does **not** install a `wifite2` alias; if a Ghostlink-managed `/usr/local/bin/wifite2` exists from a previous version, `setup.sh --update` removes it. A non-Ghostlink `wifite2` wrapper that points elsewhere is preserved with a warning. Setup runs `apt update` and installs dependency packages (aircrack-ng, tshark, hashcat, hcxdumptool, hcxtools, reaver, bully, cowpatty, macchanger, etc.) at the latest version available from the configured Debian / Raspberry Pi OS repositories. Optional packages that are unavailable on the running distribution log a warning and continue; required base packages still fail loudly.
 
-Today's maintained upstream is kimocoder/wifite2; setup pulls the latest commit from `https://github.com/kimocoder/wifite2.git` into `/opt/wifite2` and writes a wrapper that runs `python3 /opt/wifite2/Wifite.py`. If upstream is renamed or replaced, only the installer needs to change — the canonical command remains `wifite`.
+Today's maintained upstream is kimocoder/wifite2; setup pulls the latest commit from `https://github.com/kimocoder/wifite2.git` into `/opt/wifite2` (the upstream repo name) and writes a wrapper that runs `python3 /opt/wifite2/Wifite.py`. The source path may stay `/opt/wifite2`, but the user-facing command is only `wifite`. If upstream is renamed or replaced, only the installer needs to change.
 
 | Tool | Path | Source |
 |---|---|---|
-| `wifite` (canonical) | `/usr/local/bin/wifite` | wrapper to `python3` + the latest maintained Wifite source (currently kimocoder/wifite2 in `/opt/wifite2`) |
-| `wifite2` (alias) | `/usr/local/bin/wifite2` | compatibility symlink pointing to the same `wifite` wrapper |
+| `wifite` | `/usr/local/bin/wifite` | wrapper to `python3` + the latest maintained Wifite source (currently kimocoder/wifite2 in `/opt/wifite2`) |
 | `airgeddon` | `/usr/local/bin/airgeddon` | symlink to `/opt/airgeddon/airgeddon.sh` (v1s1t0r1sh3r3) |
 | `nmap` | `/usr/bin/nmap` | apt package |
 | `aircrack-ng` | `/usr/bin/aircrack-ng` | apt package |
@@ -254,7 +253,7 @@ Sample output includes:
 - MT7612U physical presence, mapped interface, driver binding, monitor support, and mt76 module state
 - Driver compatibility warnings for headers, DKMS, and candidate modules
 - Ghostlink-AP routing snapshot: mode (`Direct NAT` / `VPN Gateway` / `inactive`), AP interface, AP subnet, uplink or VPN interface, kill-switch state
-- Toolchain dependency status: `wifite`, `wifite2`, `airgeddon`, `tmux`, `nmap`, `aircrack-ng`, `tshark`, `hashcat`, `hcxdumptool`, `hcxpcapngtool`, `reaver`, `bully`, `cowpatty`, `macchanger`, `sensors`, `hostapd`, `dnsmasq`, `iw`, `nmcli` (each with absolute path)
+- Toolchain dependency status: `wifite`, `airgeddon`, `tmux`, `nmap`, `aircrack-ng`, `tshark`, `hashcat`, `hcxdumptool`, `hcxpcapngtool`, `reaver`, `bully`, `cowpatty`, `macchanger`, `sensors`, `hostapd`, `dnsmasq`, `iw`, `nmcli` (each with absolute path); a leftover `wifite2` wrapper, if any, appears under a separate "Legacy wrappers" section
 - Headless environment detection (`DISPLAY`/`WAYLAND_DISPLAY`) and Airgeddon tmux readiness
 
 ## Real Tested USB Adapter IDs

@@ -146,39 +146,35 @@ def _tool_path(name):
     return shutil.which(name)
 
 def _wifite_command():
-    """Return the canonical system-wide Wifite command, preferring 'wifite'.
+    """Return the canonical system-wide Wifite command path or None.
 
-    Policy: install the latest maintained Wifite implementation. The canonical
-    user-facing command is `wifite`; `wifite2` is a compatibility alias.
-    Returns the absolute path of whichever resolves first, or None.
+    Policy: Ghostlink exposes exactly one user-facing Wifite command, `wifite`.
+    `wifite2` is intentionally NOT used as a fallback.
     """
-    return _tool_path("wifite") or _tool_path("wifite2")
+    return _tool_path("wifite")
 
 
 def _wifite_implementation_info():
-    """Inspect installed Wifite wrapper(s) and return diagnostic info dict.
+    """Inspect the installed `wifite` wrapper and return diagnostic info dict.
 
     Returns dict with keys:
-      wifite_path:    path of `wifite` if installed, else None
-      wifite2_path:   path of `wifite2` if installed, else None
-      source:         the entry .py file the wrapper executes (or None)
-      git_ref:        git describe/short-ref of the source dir, if a checkout
-      both_same:      True if `wifite` and `wifite2` resolve to the same code
+      wifite_path:        path of `wifite` if installed, else None
+      source:             the entry .py file the wrapper executes (or None)
+      git_ref:            git describe/short-ref of the source dir, if any
+      legacy_wifite2:     path of `/usr/local/bin/wifite2` if it still exists,
+                          else None. Reported under "Legacy wrappers" only.
     Never parses Wifite banner art for a version string.
     """
     info = {
         "wifite_path": _tool_path("wifite"),
-        "wifite2_path": _tool_path("wifite2"),
         "source": None,
         "git_ref": None,
-        "both_same": False,
+        "legacy_wifite2": None,
     }
 
-    # Resolve the python entry script that the canonical wrapper executes.
-    canonical = info["wifite_path"] or info["wifite2_path"]
-    if canonical:
+    if info["wifite_path"]:
         try:
-            with open(canonical, "r") as f:
+            with open(info["wifite_path"], "r") as f:
                 wrapper_text = f.read()
             match = re.search(r"(/[^\s\"']+\.py)", wrapper_text)
             if match:
@@ -186,16 +182,6 @@ def _wifite_implementation_info():
         except (OSError, UnicodeDecodeError):
             pass
 
-    # Determine if both wrappers point at the same implementation.
-    if info["wifite_path"] and info["wifite2_path"]:
-        try:
-            real_a = os.path.realpath(info["wifite_path"])
-            real_b = os.path.realpath(info["wifite2_path"])
-            info["both_same"] = (real_a == real_b)
-        except OSError:
-            info["both_same"] = False
-
-    # Git ref of the source repo (clean, no banner pollution).
     if info["source"]:
         src_dir = os.path.dirname(info["source"])
         if os.path.isdir(os.path.join(src_dir, ".git")):
@@ -210,6 +196,11 @@ def _wifite_implementation_info():
                 )
                 if code == 0 and ref.strip():
                     info["git_ref"] = ref.strip().splitlines()[0]
+
+    # Diagnostics only: report a leftover wifite2 wrapper as legacy.
+    legacy_path = "/usr/local/bin/wifite2"
+    if os.path.exists(legacy_path) or os.path.islink(legacy_path):
+        info["legacy_wifite2"] = legacy_path
     return info
 
 
@@ -746,6 +737,7 @@ def cmd_diag():
     # which produced garbage version strings in earlier diagnostics. Instead,
     # read the wrapper script to find its python entry, then use git ref of the
     # source repo for a clean implementation/version label.
+    # Policy: Ghostlink exposes only `wifite` as the user-facing command.
     wf = _wifite_implementation_info()
     impl_label = "latest maintained Wifite implementation"
     if wf["wifite_path"]:
@@ -757,13 +749,6 @@ def cmd_diag():
         print(f"- wifite: Installed ({wf['wifite_path']}, {', '.join(details)})")
     else:
         print("- wifite: Missing")
-    if wf["wifite2_path"]:
-        if wf["both_same"]:
-            print(f"- wifite2: Installed ({wf['wifite2_path']}, compatibility alias for wifite)")
-        else:
-            print(f"- wifite2: Installed ({wf['wifite2_path']}, WARNING: differs from wifite — possibly stale)")
-    else:
-        print("- wifite2: Missing")
     extended_tools = [
         'airgeddon', 'tmux', 'aircrack-ng', 'hostapd', 'dnsmasq', 'iw', 'nmcli', 'nmap',
         'tshark', 'hashcat', 'hcxdumptool', 'hcxpcapngtool',
@@ -793,6 +778,12 @@ def cmd_diag():
             print("- Headless environment: Yes (no DISPLAY/WAYLAND_DISPLAY); tmux MISSING — Airgeddon will not run interactively.")
     else:
         print("- Headless environment: No (DISPLAY or WAYLAND_DISPLAY is set).")
+
+    if wf.get("legacy_wifite2"):
+        print("\nLegacy wrappers:")
+        print(f"- legacy wifite2 wrapper: present at {wf['legacy_wifite2']}")
+        print("  Ghostlink no longer installs a wifite2 alias. Run 'sudo ./setup.sh --update'")
+        print("  to clean up if this wrapper was Ghostlink-managed; otherwise leave it alone.")
 
     print("\nDriver Modules:")
     for module in ['88XXau', 'rtw_8812au', 'rtw88_8812au', 'mt76x2u', 'mt76_usb', 'mt76', 'rtw_8822bu', 'rtw88_8822bu', '8188eu', 'rtl8xxxu', 'brcmfmac']:
