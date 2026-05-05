@@ -1,6 +1,6 @@
-# Ghostlink-Mini
+# Ghostlink
 
-Ghostlink-Mini is a Raspberry Pi / Debian SBC CLI tool for authorized/lab Wi-Fi workflows using multiple Wi-Fi adapters with fixed roles.
+Ghostlink is a Raspberry Pi / Debian SBC pentest CLI platform for managing external wireless adapters, launching Wi-Fi assessment tools, running network discovery, and preparing a portable multi-adapter field workflow.
 
 ## Platform Support
 
@@ -8,10 +8,10 @@ Chapter 1 targets:
 
 | Platform | Profile | Status | GPU Memory Policy |
 |---|---|---|---|
-| Raspberry Pi Zero W | `rpi_zero_w` | tested/owned | 16MB headless floor |
-| Raspberry Pi Zero 2 W | `rpi_zero_2_w` | tested/owned | 16MB headless floor |
-| Raspberry Pi 3B | `rpi_3b` | tested/owned | 16MB headless floor |
-| Raspberry Pi 5 | `rpi_5` | tested/owned | Skipped / firmware-managed |
+| Raspberry Pi Zero W | `rpi_zero_w` | tested | 16MB headless floor |
+| Raspberry Pi Zero 2 W | `rpi_zero_2_w` | tested | 16MB headless floor |
+| Raspberry Pi 3B | `rpi_3b` | tested | 16MB headless floor |
+| Raspberry Pi 5 | `rpi_5` | tested | Skipped / firmware-managed |
 | Raspberry Pi 1 | `rpi_1` | supported/untested | 16MB headless floor |
 | Raspberry Pi 2 | `rpi_2` | supported/untested | 16MB headless floor |
 | Raspberry Pi 3B+ | `rpi_3b_plus` | supported/untested | 16MB headless floor |
@@ -64,6 +64,8 @@ Setup installs and prepares all supported driver paths even when the adapters ar
 - MT7612U in-kernel mt76 module check and `firmware-misc-nonfree`
 - Wifite2, Airgeddon, aircrack-ng, nmap, and other toolchain dependencies
 
+Setup syncs the installed runtime to `/opt/ghostlink` and installs the global CLI command as `ghostlink`.
+
 Setup also detects the platform profile and applies only compatible system tuning:
 
 - Profile-aware ZRAM sizing
@@ -94,20 +96,19 @@ Interactive menu options include:
 | # | Option |
 |---|---|
 | 1 | Status |
-| 2 | Scan Wi-Fi networks |
-| 3 | Start pentest |
-| 4 | Show saved credentials |
-| 5 | Connect to saved network |
-| 6 | Start Ghostlink-AP on RTL88x2BU |
-| 7 | Stop Ghostlink-AP |
-| 8 | Network Scan (nmap) |
+| 2 | Start Wifite |
+| 3 | Start Airgeddon |
+| 4 | Start Nmap |
+| 5 | Show saved credentials |
+| 6 | Connect to saved network |
+| 7 | Start Ghostlink-AP on RTL88x2BU |
+| 8 | Stop Ghostlink-AP |
 | 9 | Restart networking services |
 | 10 | Run diagnostics |
-| 11 | Update Ghostlink-Mini |
+| 11 | Update Ghostlink |
 | 12 | Adapter roles (view) |
 | 13 | Monitor mode toggle |
-| 14 | Launch Airgeddon |
-| 15 | Exit |
+| 14 | Exit |
 
 > **Airgeddon note**: Ghostlink validates the selected external adapter and blocks the management interface before launching Airgeddon. Airgeddon may still display its own interface picker - select the validated adapter inside Airgeddon. Never select the management/onboard Wi-Fi inside Airgeddon.
 
@@ -131,7 +132,7 @@ ghostlink -diag                                Run system diagnostics
 ghostlink -restart-net                         Restart networking services
 ghostlink -update                              Pull latest version and update
 ghostlink network-scan [--target <IP/CIDR>] [--type <type>]
-                                               Run nmap network scan
+                                               Run Nmap scan
 ```
 
 ## Scan and Pentest Examples
@@ -219,6 +220,61 @@ Run these checks on target hardware after setup. Local Windows syntax checks do 
 - [ ] Management interface is never used for scan or pentest
 - [ ] `ghostlink -ap-start` starts AP on RTL88x2BU, uplink via RTL8812AU or MT7612U
 - [ ] Internet is accessible through the uplink adapter during AP operation
+
+## Roadmap
+
+These items are future work and are not claimed as implemented.
+
+Wi-Fi:
+- Stronger adapter role management
+- Wifite workflow improvements
+- Airgeddon workflow improvements
+- Capture/session reporting
+- Credential/database reporting
+- AP/uplink automation
+
+Bluetooth:
+- Bluetooth adapter detection
+- BLE scanning
+- Device inventory
+- Optional lab-only Bluetooth assessment workflows
+
+RF / Sub-GHz:
+- CC1101 support
+- Signal capture/analysis helpers
+- Replay-safe lab tooling
+- Frequency/device inventory
+
+GPS / Field Logging:
+- GPS module support
+- Scan/session geotagging
+- Field notes
+- Exportable reports
+
+Network Discovery:
+- Nmap workflow improvements
+- Host inventory
+- Local subnet mapping
+- Service history
+
+Hardware/SBC:
+- Raspberry Pi Zero W / Zero 2 W / 3B / 5 validation
+- Raspberry Pi 1 / 2 / 4 untested support tracking
+- Generic Debian SBC best-effort support
+
+Reporting/Database:
+- Structured session reports
+- Saved credentials view/export
+- Adapter/session logs
+- HTML/JSON/Markdown exports
+
+Future Expansion:
+- SDR support
+- NRF24L01 support
+- PN532/NFC support
+- TUI dashboard
+- Optional web dashboard
+- Plugin/tool registry
 
 ## Updating
 

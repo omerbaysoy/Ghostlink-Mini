@@ -21,7 +21,7 @@ MT7612U_USB_IDS = frozenset({
 PLATFORM_PROFILES = {
     "rpi_zero_w": {
         "label": "Raspberry Pi Zero W",
-        "support": "tested/owned",
+        "support": "tested",
         "zram_mb": 512,
         "gpu_mem_mb": 16,
         "overclock": "stock-safe baseline; no automatic CPU overclock",
@@ -29,7 +29,7 @@ PLATFORM_PROFILES = {
     },
     "rpi_zero_2_w": {
         "label": "Raspberry Pi Zero 2 W",
-        "support": "tested/owned",
+        "support": "tested",
         "zram_mb": 1024,
         "gpu_mem_mb": 16,
         "overclock": "safe mild profile: arm_freq=1100",
@@ -49,11 +49,11 @@ PLATFORM_PROFILES = {
         "zram_mb": 1024,
         "gpu_mem_mb": 16,
         "overclock": "not applied by default",
-        "notes": "supported but not owned/tested for Chapter 1.",
+        "notes": "supported but not yet validated for Chapter 1.",
     },
     "rpi_3b": {
         "label": "Raspberry Pi 3B",
-        "support": "tested/owned",
+        "support": "tested",
         "zram_mb": 1024,
         "gpu_mem_mb": 16,
         "overclock": "safe mild profile: arm_freq=1300, core_freq=500, over_voltage=2",
@@ -73,11 +73,11 @@ PLATFORM_PROFILES = {
         "zram_mb": 2048,
         "gpu_mem_mb": 16,
         "overclock": "not applied by default",
-        "notes": "supported but not owned/tested for Chapter 1.",
+        "notes": "supported but not yet validated for Chapter 1.",
     },
     "rpi_5": {
         "label": "Raspberry Pi 5",
-        "support": "tested/owned",
+        "support": "tested",
         "zram_mb": 2048,
         "gpu_mem_mb": None,
         "overclock": "safe mild profile: arm_freq=2600",

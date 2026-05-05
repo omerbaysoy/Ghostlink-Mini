@@ -1,7 +1,7 @@
 import os
 import subprocess
 
-INSTALL_DIR = "/opt/ghostlink-mini"
+INSTALL_DIR = "/opt/ghostlink"
 
 def _run(args, cwd=INSTALL_DIR, interactive=False):
     kwargs = {
@@ -49,7 +49,7 @@ def update_ghostlink():
     if code != 0:
         return {
             "status": "error",
-            "message": "Update setup failed. Run `sudo ./setup.sh --update` from /opt/ghostlink-mini for details.",
+            "message": "Update setup failed. Run `sudo ./setup.sh --update` from /opt/ghostlink for details.",
             "log": out,
         }
 
@@ -57,4 +57,4 @@ def update_ghostlink():
     if code != 0:
         return {"status": "error", "message": "Update installed, but ghostlink -diag failed.", "log": out}
 
-    return {"status": "success", "message": "Successfully updated Ghostlink-Mini."}
+    return {"status": "success", "message": "Successfully updated Ghostlink."}

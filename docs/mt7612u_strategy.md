@@ -1,6 +1,6 @@
 # MT7612U Driver Strategy - Raspberry Pi and Debian SBC
 
-This document records the strategy for supporting the MT7612U USB Wi-Fi adapter as a second main pentest/access/uplink adapter in Ghostlink-Mini.
+This document records the strategy for supporting the MT7612U USB Wi-Fi adapter as a second main pentest/access/uplink adapter in Ghostlink.
 
 ## Overview
 
@@ -29,7 +29,7 @@ The relevant firmware file is typically `mt7662u.bin` with `mt7662u_rom_patch.bi
 
 ## Interface Detection
 
-Ghostlink-Mini identifies the MT7612U using stable sysfs USB vendor/product mapping, not interface names like `wlan0` or `wlan1`, which can change between reboots.
+Ghostlink identifies the MT7612U using stable sysfs USB vendor/product mapping, not interface names like `wlan0` or `wlan1`, which can change between reboots.
 
 Detection reads:
 

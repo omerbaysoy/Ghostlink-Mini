@@ -1,10 +1,11 @@
 #!/bin/bash
 
-# Ghostlink-Mini Setup Script
+# Ghostlink Setup Script
 
 set -o pipefail
 
-INSTALL_DIR="/opt/ghostlink-mini"
+INSTALL_DIR="/opt/ghostlink"
+LEGACY_INSTALL_SUFFIX="-mini"
 SRC_ENTRY="src/ghostlink.py"
 LAUNCHER="/usr/local/bin/ghostlink"
 SETUP_LOG="/var/log/ghostlink/setup.log"
@@ -121,7 +122,7 @@ set_platform_profile_defaults() {
     case "$PLATFORM_PROFILE" in
         rpi_zero_w)
             PLATFORM_LABEL="Raspberry Pi Zero W"
-            PLATFORM_SUPPORT="tested/owned"
+            PLATFORM_SUPPORT="tested"
             PLATFORM_ZRAM_MB=512
             PLATFORM_GPU_MEM_MB=16
             PLATFORM_OC_SUMMARY="stock-safe baseline; no automatic CPU overclock"
@@ -129,7 +130,7 @@ set_platform_profile_defaults() {
             ;;
         rpi_zero_2_w)
             PLATFORM_LABEL="Raspberry Pi Zero 2 W"
-            PLATFORM_SUPPORT="tested/owned"
+            PLATFORM_SUPPORT="tested"
             PLATFORM_ZRAM_MB=1024
             PLATFORM_GPU_MEM_MB=16
             PLATFORM_OC_SUMMARY="safe mild profile: arm_freq=1100"
@@ -149,11 +150,11 @@ set_platform_profile_defaults() {
             PLATFORM_ZRAM_MB=1024
             PLATFORM_GPU_MEM_MB=16
             PLATFORM_OC_SUMMARY="not applied by default"
-            PLATFORM_NOTES="supported but not owned/tested for Chapter 1."
+            PLATFORM_NOTES="supported but not yet validated for Chapter 1."
             ;;
         rpi_3b)
             PLATFORM_LABEL="Raspberry Pi 3B"
-            PLATFORM_SUPPORT="tested/owned"
+            PLATFORM_SUPPORT="tested"
             PLATFORM_ZRAM_MB=1024
             PLATFORM_GPU_MEM_MB=16
             PLATFORM_OC_SUMMARY="safe mild profile: arm_freq=1300, core_freq=500, over_voltage=2"
@@ -173,11 +174,11 @@ set_platform_profile_defaults() {
             PLATFORM_ZRAM_MB=2048
             PLATFORM_GPU_MEM_MB=16
             PLATFORM_OC_SUMMARY="not applied by default"
-            PLATFORM_NOTES="supported but not owned/tested for Chapter 1."
+            PLATFORM_NOTES="supported but not yet validated for Chapter 1."
             ;;
         rpi_5)
             PLATFORM_LABEL="Raspberry Pi 5"
-            PLATFORM_SUPPORT="tested/owned"
+            PLATFORM_SUPPORT="tested"
             PLATFORM_ZRAM_MB=2048
             PLATFORM_GPU_MEM_MB=""
             PLATFORM_OC_SUMMARY="safe mild profile: arm_freq=2600"
@@ -298,15 +299,52 @@ log_platform_summary() {
 
 log_compatibility_matrix() {
     log "--- Chapter 1 Compatibility Matrix ---"
-    log "[+] rpi_zero_w: tested/owned | ZRAM 512MB | GPU 16MB | OC stock-safe | fan/storage N/A | drivers: all prepared"
-    log "[+] rpi_zero_2_w: tested/owned | ZRAM 1024MB | GPU 16MB | OC arm_freq=1100 | fan/storage N/A | drivers: all prepared"
-    log "[+] rpi_3b: tested/owned | ZRAM 1024MB | GPU 16MB | OC arm_freq=1300/core_freq=500 | fan/storage N/A | drivers: all prepared"
-    log "[+] rpi_5: tested/owned | ZRAM 2048MB | GPU skipped/firmware-managed | OC arm_freq=2600 | fan/PCIe gated to Pi 5 | drivers: all prepared"
+    log "[+] rpi_zero_w: tested | ZRAM 512MB | GPU 16MB | OC stock-safe | fan/storage N/A | drivers: all prepared"
+    log "[+] rpi_zero_2_w: tested | ZRAM 1024MB | GPU 16MB | OC arm_freq=1100 | fan/storage N/A | drivers: all prepared"
+    log "[+] rpi_3b: tested | ZRAM 1024MB | GPU 16MB | OC arm_freq=1300/core_freq=500 | fan/storage N/A | drivers: all prepared"
+    log "[+] rpi_5: tested | ZRAM 2048MB | GPU skipped/firmware-managed | OC arm_freq=2600 | fan/PCIe gated to Pi 5 | drivers: all prepared"
     log "[+] rpi_1: supported/untested | ZRAM 512MB | GPU 16MB | OC skipped | fan/storage N/A | drivers: best effort"
     log "[+] rpi_2: supported/untested | ZRAM 1024MB | GPU 16MB | OC skipped | fan/storage N/A | drivers: best effort"
     log "[+] rpi_3b_plus: supported/untested | ZRAM 1024MB | GPU 16MB | OC skipped | fan/storage N/A | drivers: best effort"
     log "[+] rpi_4: supported/untested | ZRAM 2048MB | GPU 16MB | OC skipped | fan/storage N/A | drivers: best effort"
     log "[+] debian_sbc: best-effort | ZRAM 1024MB | Pi boot/GPU/OC/fan/PCIe skipped | drivers: all prepared when headers are available"
+}
+
+legacy_install_dir() {
+    printf '%s%s\n' "$INSTALL_DIR" "$LEGACY_INSTALL_SUFFIX"
+}
+
+migrate_legacy_install_path() {
+    local old_dir backup target
+    old_dir="$(legacy_install_dir)"
+
+    if [ "$old_dir" = "$INSTALL_DIR" ] || { [ ! -e "$old_dir" ] && [ ! -L "$old_dir" ]; }; then
+        return
+    fi
+
+    if [ -L "$old_dir" ]; then
+        target="$(readlink "$old_dir" 2>/dev/null || true)"
+        if [ "$target" = "$INSTALL_DIR" ]; then
+            return
+        fi
+        log "[+] Migrating legacy install path to $INSTALL_DIR..."
+        rm -f "$old_dir" >>"$SETUP_LOG" 2>&1 || return 1
+        ln -s "$INSTALL_DIR" "$old_dir" >>"$SETUP_LOG" 2>&1 || return 1
+        return
+    fi
+
+    if [ -d "$old_dir" ]; then
+        log "[+] Migrating legacy install path to $INSTALL_DIR..."
+        backup="${old_dir}.legacy.$(date +%Y%m%d%H%M%S)"
+        mv "$old_dir" "$backup" >>"$SETUP_LOG" 2>&1 || return 1
+        ln -s "$INSTALL_DIR" "$old_dir" >>"$SETUP_LOG" 2>&1 || return 1
+        log "[+] Legacy install directory moved aside; compatibility symlink created."
+        return
+    fi
+
+    log "[+] Migrating legacy install path to $INSTALL_DIR..."
+    rm -f "$old_dir" >>"$SETUP_LOG" 2>&1 || return 1
+    ln -s "$INSTALL_DIR" "$old_dir" >>"$SETUP_LOG" 2>&1 || return 1
 }
 
 set_runtime_permissions() {
@@ -360,11 +398,11 @@ install_launcher() {
 
     local tmp_launcher
     tmp_launcher="$(mktemp)"
-    cat >"$tmp_launcher" <<'LAUNCHER'
+    cat >"$tmp_launcher" <<LAUNCHER
 #!/bin/bash
-export PYTHONPATH=/opt/ghostlink-mini/src
+export PYTHONPATH=${INSTALL_DIR}/src
 export PYTHONDONTWRITEBYTECODE=1
-exec python3 /opt/ghostlink-mini/src/ghostlink.py "$@"
+exec python3 ${INSTALL_DIR}/src/ghostlink.py "\$@"
 LAUNCHER
     install -m 0755 "$tmp_launcher" "$LAUNCHER"
     rm -f "$tmp_launcher"
@@ -894,7 +932,7 @@ boot_config_has_key() {
 boot_config_has_user_gpu_mem() {
     local path="$1"
     awk '
-        /^[[:space:]]*# Ghostlink-Mini: GPU memory floor/ {
+        /^[[:space:]]*# Ghostlink.*GPU memory floor/ {
             ghostlink_gpu = 1
             next
         }
@@ -981,7 +1019,7 @@ configure_rpi_gpu_memory() {
     {
         echo ""
         echo "[all]"
-        echo "# Ghostlink-Mini: GPU memory floor for $PLATFORM_LABEL"
+        echo "# Ghostlink: GPU memory floor for $PLATFORM_LABEL"
         echo "gpu_mem=$PLATFORM_GPU_MEM_MB"
     } >>"$config_path"
 }
@@ -1013,7 +1051,7 @@ configure_rpi_overclock() {
             cat >>"$config_path" <<'EOF'
 
 [all]
-# Ghostlink-Mini: safe CPU profile for Raspberry Pi Zero 2 W
+# Ghostlink: safe CPU profile for Raspberry Pi Zero 2 W
 arm_freq=1100
 EOF
             ;;
@@ -1022,7 +1060,7 @@ EOF
             cat >>"$config_path" <<'EOF'
 
 [all]
-# Ghostlink-Mini: safe CPU profile for Raspberry Pi 3B
+# Ghostlink: safe CPU profile for Raspberry Pi 3B
 arm_freq=1300
 core_freq=500
 over_voltage=2
@@ -1033,7 +1071,7 @@ EOF
             cat >>"$config_path" <<'EOF'
 
 [all]
-# Ghostlink-Mini: safe CPU profile for Raspberry Pi 5
+# Ghostlink: safe CPU profile for Raspberry Pi 5
 arm_freq=2600
 EOF
             ;;
@@ -1061,7 +1099,7 @@ configure_rpi5_fan() {
         cat >>"$config_path" <<'EOF'
 
 [all]
-# Ghostlink-Mini: RPi 5 Active Cooler medium-high profile
+# Ghostlink: RPi 5 Active Cooler medium-high profile
 dtparam=fan_temp0=45000
 dtparam=fan_temp0_speed=150
 dtparam=fan_temp1=55000
@@ -1095,13 +1133,13 @@ configure_rpi5_pcie() {
     cat >>"$config_path" <<'EOF'
 
 [all]
-# Ghostlink-Mini: Enable PCIe Gen 3 for M.2 SSD speed boost
+# Ghostlink: Enable PCIe Gen 3 for M.2 SSD speed boost
 dtparam=pciex1_gen=3
 EOF
 }
 
 echo "======================================"
-echo "    Ghostlink-Mini Setup Script"
+echo "    Ghostlink Setup Script"
 echo "======================================"
 [ "$UPDATE_MODE" -eq 1 ] && log "Running in UPDATE mode..."
 detect_platform
@@ -1152,16 +1190,17 @@ if [ "$DRY_RUN" -eq 1 ]; then
 fi
 
 if [ "$UPDATE_MODE" -eq 0 ]; then
-    echo "This script installs Ghostlink-Mini for Raspberry Pi OS / Debian."
+    echo "This script installs Ghostlink for Raspberry Pi OS / Debian."
     echo "It will not bring down your current management connection automatically."
     read -r -p "Press Enter to continue or Ctrl+C to abort..."
 fi
 
-log "[+] Creating Ghostlink-Mini directories..."
+log "[+] Creating Ghostlink directories..."
 mkdir -p /etc/ghostlink /var/lib/ghostlink /var/log/ghostlink
 set_runtime_permissions
 
 sync_project
+migrate_legacy_install_path || log "[!] Legacy install path migration could not be completed; continuing with $INSTALL_DIR."
 install_launcher
 
 log "[+] Updating apt repositories..."

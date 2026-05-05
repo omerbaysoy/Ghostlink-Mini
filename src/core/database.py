@@ -88,7 +88,7 @@ def init_db():
         )
     ''')
 
-    # Network Scan Jobs
+    # Nmap scan jobs
     c.execute('''
         CREATE TABLE IF NOT EXISTS network_scan_jobs (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -101,7 +101,7 @@ def init_db():
         )
     ''')
 
-    # Network Scan Hosts
+    # Nmap scan hosts
     c.execute('''
         CREATE TABLE IF NOT EXISTS network_scan_hosts (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -114,7 +114,7 @@ def init_db():
         )
     ''')
 
-    # Network Scan Ports
+    # Nmap scan ports
     c.execute('''
         CREATE TABLE IF NOT EXISTS network_scan_ports (
             id INTEGER PRIMARY KEY AUTOINCREMENT,

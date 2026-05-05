@@ -559,7 +559,7 @@ def cmd_restart_net():
         print("Restart command sent.")
 
 def cmd_update():
-    print("Updating Ghostlink-Mini...")
+    print("Updating Ghostlink...")
     res = update_ghostlink()
     if res['status'] == 'success':
         print("[+] Update successful.")
@@ -574,7 +574,7 @@ def cmd_network_scan(args_target=None, args_type=None, args_last=False, args_lis
         if not jobs:
             print("No network scans found.")
             return
-        print("\n--- Network Scans ---")
+        print("\n--- Nmap Scans ---")
         for job in jobs:
             print(f"ID: {job['id']:<4} | {job['timestamp']} | Type: {job['scan_type']:<10} | Target: {job['target']:<15} | Status: {job['status']}")
         return
@@ -773,11 +773,6 @@ def cmd_airgeddon():
         return
 
     selected = iface_list[idx]
-    print("\n[!] Airgeddon is for authorized/lab use only. Only target networks you own or have explicit written permission to test.")
-    confirm = input("Confirm target is authorized? (y/n): ").strip().lower()
-    if confirm != 'y':
-        print("Aborted.")
-        return
 
     airgeddon_paths = ["/usr/local/bin/airgeddon", "/opt/airgeddon/airgeddon.sh"]
     airgeddon_bin = None
@@ -814,41 +809,40 @@ def interactive_menu():
             print_status_overview()
             
             print("1.  Status")
-            print("2.  Scan Wi-Fi networks")
-            print("3.  Start pentest")
-            print("4.  Show saved credentials")
-            print("5.  Connect to saved network")
-            print("6.  Start Ghostlink-AP on RTL88x2BU")
-            print("7.  Stop Ghostlink-AP")
-            print("8.  Network Scan")
+            print("2.  Start Wifite")
+            print("3.  Start Airgeddon")
+            print("4.  Start Nmap")
+            print("5.  Show saved credentials")
+            print("6.  Connect to saved network")
+            print("7.  Start Ghostlink-AP on RTL88x2BU")
+            print("8.  Stop Ghostlink-AP")
             print("9.  Restart networking services")
             print("10. Run diagnostics")
-            print("11. Update Ghostlink-Mini")
+            print("11. Update Ghostlink")
             print("12. Adapter roles")
             print("13. Monitor mode toggle")
-            print("14. Launch Airgeddon")
-            print("15. Exit")
+            print("14. Exit")
 
             choice = input("\nSelect option: ")
 
             if choice == '1':
                 cmd_status()
             elif choice == '2':
-                cmd_scan()
-            elif choice == '3':
                 ssid = input("Target SSID: ")
                 if ssid:
                     cmd_pentest(ssid)
+            elif choice == '3':
+                cmd_airgeddon()
             elif choice == '4':
-                cmd_creds()
-            elif choice == '5':
-                cmd_connect()
-            elif choice == '6':
-                cmd_ap_start()
-            elif choice == '7':
-                cmd_ap_stop()
-            elif choice == '8':
                 cmd_network_scan()
+            elif choice == '5':
+                cmd_creds()
+            elif choice == '6':
+                cmd_connect()
+            elif choice == '7':
+                cmd_ap_start()
+            elif choice == '8':
+                cmd_ap_stop()
             elif choice == '9':
                 cmd_restart_net()
             elif choice == '10':
@@ -860,19 +854,17 @@ def interactive_menu():
             elif choice == '13':
                 cmd_monitor_mode()
             elif choice == '14':
-                cmd_airgeddon()
-            elif choice == '15':
                 break
             else:
                 print("Invalid option.")
                 
             input("\nPress Enter to continue...")
         except KeyboardInterrupt:
-            print("\nExiting Ghostlink-Mini.")
+            print("\nExiting Ghostlink.")
             break
 
 def main():
-    parser = argparse.ArgumentParser(description="Ghostlink-Mini")
+    parser = argparse.ArgumentParser(description="Ghostlink")
     parser.add_argument('-status', action='store_true', help="Show status")
     parser.add_argument('-db', action='store_true', help="Show database status")
     parser.add_argument('-creds', action='store_true', help="Show saved credentials")
@@ -890,7 +882,7 @@ def main():
     scan_parser.add_argument('--iface', help='Interface to use')
     
     # pentest command
-    pentest_parser = subparsers.add_parser('pentest', help='Start pentest')
+    pentest_parser = subparsers.add_parser('pentest', help='Start Wifite workflow')
     pentest_parser.add_argument('--iface', help='Interface to use')
     pentest_parser.add_argument('--ssid', required=True, help='Target SSID')
     pentest_parser.add_argument('--bssid', help='Target BSSID')
@@ -937,5 +929,5 @@ if __name__ == '__main__':
     try:
         main()
     except KeyboardInterrupt:
-        print("\nExiting Ghostlink-Mini.")
+        print("\nExiting Ghostlink.")
         sys.exit(0)

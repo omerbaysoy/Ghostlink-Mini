@@ -16,7 +16,8 @@ HOSTAPD_PID = os.path.join(RUNTIME_DIR, "hostapd.pid")
 DNSMASQ_PID = os.path.join(RUNTIME_DIR, "dnsmasq.pid")
 AP_STATE = os.path.join(RUNTIME_DIR, "ap_state.json")
 AP_LOG = os.path.join(GHOSTLINK_LOG_DIR, "ap.log")
-IPTABLES_COMMENT = "ghostlink-mini"
+IPTABLES_COMMENT = "ghostlink"
+LEGACY_IPTABLES_COMMENT = "ghostlink" + "-mini"
 
 def run_cmd(cmd):
     try:
@@ -428,15 +429,24 @@ def _iptables_delete_all(table, rule):
     while _iptables_check(table, rule):
         run_cmd_no_check(f"iptables {table_arg}-D {rule}")
 
-def _ap_rules(ap_iface, uplink_iface):
+def _ap_rules(ap_iface, uplink_iface, comment_value=IPTABLES_COMMENT):
     ap = shlex.quote(ap_iface)
     up = shlex.quote(uplink_iface)
-    comment = shlex.quote(IPTABLES_COMMENT)
+    comment = shlex.quote(comment_value)
     return [
         ("nat", f"POSTROUTING -o {up} -m comment --comment {comment} -j MASQUERADE"),
         ("", f"FORWARD -i {up} -o {ap} -m state --state RELATED,ESTABLISHED -m comment --comment {comment} -j ACCEPT"),
         ("", f"FORWARD -i {ap} -o {up} -m comment --comment {comment} -j ACCEPT"),
     ]
+
+def _ap_cleanup_rules(ap_iface, uplink_iface):
+    comments = [IPTABLES_COMMENT]
+    if LEGACY_IPTABLES_COMMENT not in comments:
+        comments.append(LEGACY_IPTABLES_COMMENT)
+    rules = []
+    for comment in comments:
+        rules.extend(_ap_rules(ap_iface, uplink_iface, comment))
+    return rules
 
 def start_ap(ap_iface, uplink_iface):
     if not require_root("Starting Ghostlink-AP"):
@@ -536,7 +546,7 @@ def stop_ap(ap_iface, uplink_iface):
     _stop_pid(DNSMASQ_PID, DNSMASQ_CONF)
 
     if ap_iface and uplink_iface:
-        for table, rule in _ap_rules(ap_iface, uplink_iface):
+        for table, rule in _ap_cleanup_rules(ap_iface, uplink_iface):
             _iptables_delete_all(table, rule)
 
     if ap_iface:

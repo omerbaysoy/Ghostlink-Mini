@@ -1,15 +1,15 @@
 # Raspberry Pi and Debian SBC Compatibility
 
-This document describes the Chapter 1 platform compatibility layer for Ghostlink-Mini.
+This document describes the Chapter 1 platform compatibility layer for Ghostlink.
 
 ## Target Platforms
 
 | Platform | Profile | Status | ZRAM | GPU Memory | Default CPU Profile | Fan/Storage Notes | Driver Notes |
 |---|---|---|---|---|---|---|---|
-| Raspberry Pi Zero W | `rpi_zero_w` | tested/owned | 512 MB | 16 MB | Stock-safe baseline; no automatic CPU overclock | No Pi 5 fan/PCIe tuning | All supported driver paths are prepared when headers are available; external powered USB is recommended |
-| Raspberry Pi Zero 2 W | `rpi_zero_2_w` | tested/owned | 1024 MB | 16 MB | `arm_freq=1100` | No Pi 5 fan/PCIe tuning | All supported driver paths are prepared when headers are available |
-| Raspberry Pi 3B | `rpi_3b` | tested/owned | 1024 MB | 16 MB | `arm_freq=1300`, `core_freq=500`, `over_voltage=2` | No Pi 5 fan/PCIe tuning | All supported driver paths are prepared when headers are available |
-| Raspberry Pi 5 | `rpi_5` | tested/owned | 2048 MB | Skipped / firmware-managed | `arm_freq=2600` | Active Cooler thresholds and PCIe Gen 3 can be configured only on Pi 5 | All supported driver paths are prepared when headers are available |
+| Raspberry Pi Zero W | `rpi_zero_w` | tested | 512 MB | 16 MB | Stock-safe baseline; no automatic CPU overclock | No Pi 5 fan/PCIe tuning | All supported driver paths are prepared when headers are available; external powered USB is recommended |
+| Raspberry Pi Zero 2 W | `rpi_zero_2_w` | tested | 1024 MB | 16 MB | `arm_freq=1100` | No Pi 5 fan/PCIe tuning | All supported driver paths are prepared when headers are available |
+| Raspberry Pi 3B | `rpi_3b` | tested | 1024 MB | 16 MB | `arm_freq=1300`, `core_freq=500`, `over_voltage=2` | No Pi 5 fan/PCIe tuning | All supported driver paths are prepared when headers are available |
+| Raspberry Pi 5 | `rpi_5` | tested | 2048 MB | Skipped / firmware-managed | `arm_freq=2600` | Active Cooler thresholds and PCIe Gen 3 can be configured only on Pi 5 | All supported driver paths are prepared when headers are available |
 | Raspberry Pi 1 | `rpi_1` | supported/untested | 512 MB | 16 MB | Not applied by default | No Pi 5 fan/PCIe tuning | Best effort; external powered USB is strongly recommended |
 | Raspberry Pi 2 | `rpi_2` | supported/untested | 1024 MB | 16 MB | Not applied by default | No Pi 5 fan/PCIe tuning | Best effort |
 | Raspberry Pi 3B+ | `rpi_3b_plus` | supported/untested | 1024 MB | 16 MB | Not applied by default | No Pi 5 fan/PCIe tuning | Best effort; auto-OC is skipped |
@@ -53,6 +53,8 @@ Profiles emitted by the detection layer:
 ## Setup Behavior
 
 Setup remains adapter-presence independent. It prepares RTL8812AU, MT7612U, RTL88x2BU, and RTL8188EUS support even when no USB adapters are plugged in.
+
+Setup syncs the installed runtime to `/opt/ghostlink` while preserving the global CLI command name `ghostlink`.
 
 Raspberry Pi-specific behavior:
 
