@@ -15,6 +15,7 @@ from core.network import (
     detect_adapters, get_management_ip, scan_networks, connect_network,
     check_internet, start_ap, stop_ap, restart_networking, run_cmd_no_check,
     is_ghostlink_ap_running, interface_exists, get_connected_ssid,
+    list_uplink_candidates, list_vpn_interfaces, get_ap_state, get_killswitch_status,
     is_wireless_interface, get_driver, get_operstate, get_default_route_iface,
     mt7612u_usb_present, list_usb_wifi_devices,
 )
@@ -75,7 +76,11 @@ def print_status_overview():
         mgmt_ssid = get_connected_ssid(mgmt_iface)
 
     internet_status = "Connected" if check_internet() else "Disconnected"
-    ap_status = "Active" if is_ghostlink_ap_running() else "Inactive"
+    ap_running = is_ghostlink_ap_running()
+    ap_status = "Active" if ap_running else "Inactive"
+    ap_state = get_ap_state() or {}
+    ap_mode = ap_state.get("mode") if ap_running else "inactive"
+    ap_egress = ap_state.get("vpn_iface") if ap_mode == "vpn" else ap_state.get("uplink_iface")
 
     rtl8812au_status = 'Missing (USB Not Found)'
     if rtl8812au_iface:
@@ -107,6 +112,14 @@ def print_status_overview():
     print(f"[-] RTL88x2BU Status:      {rtl88x2bu_status}")
     print(f"[-] RTL8188EUS Status:     {rtl8188eus_status}")
     print(f"[-] Ghostlink-AP Status:   {ap_status}")
+    if ap_running:
+        ap_iface_now = ap_state.get("ap_iface", "unknown")
+        ap_subnet_now = ap_state.get("ap_subnet", "10.0.0.0/24")
+        mode_label = {"direct": "Direct NAT", "vpn": "VPN Gateway"}.get(ap_mode, ap_mode or "unknown")
+        print(f"[-] AP Interface:          {ap_iface_now}  Subnet: {ap_subnet_now}")
+        print(f"[-] AP Routing Mode:       {mode_label} -> {ap_egress or 'unknown'}")
+        if ap_mode == "vpn":
+            print(f"[-] AP Kill-switch:        {get_killswitch_status()}")
     print(f"[-] Internet Uplink:       {internet_status}\n")
     return adapters
 
@@ -387,37 +400,151 @@ def cmd_connect():
             except RuntimeError as e:
                 print(f"Warning: connection status was not saved: {e}")
 
+def _select_ap_iface(adapters):
+    """Prompt user to pick AP adapter. Excludes management. Defaults to RTL88x2BU."""
+    ap_candidates = _external_role_ifaces(adapters, ["rtl88x2bu", "rtl8812au", "mt7612u", "rtl8188eus"])
+    ap_candidates = [(role, iface) for role, iface in ap_candidates if not _is_management_iface(adapters, iface)]
+    if not ap_candidates:
+        print("Error: No AP-capable adapter detected (RTL88x2BU preferred).")
+        return None
+
+    print("\n--- Select AP adapter ---")
+    role_label = {
+        "rtl88x2bu": "RTL88x2BU (recommended for AP)",
+        "rtl8812au": "RTL8812AU (fallback)",
+        "mt7612u": "MT7612U (fallback)",
+        "rtl8188eus": "RTL8188EUS (fallback)",
+    }
+    for i, (role, iface) in enumerate(ap_candidates, 1):
+        driver = get_driver(iface)
+        print(f"  {i}. {iface}  driver={driver}  role={role_label.get(role, role)}")
+
+    default_idx = 1  # First candidate is highest-priority by role order
+    choice = input(f"\nSelect adapter (1-{len(ap_candidates)}, Enter for default {ap_candidates[0][1]}): ").strip()
+    if not choice:
+        idx = default_idx - 1
+    elif choice.isdigit():
+        idx = int(choice) - 1
+    else:
+        print("Cancelled: invalid input.")
+        return None
+    if not (0 <= idx < len(ap_candidates)):
+        print("Cancelled: invalid selection.")
+        return None
+    return ap_candidates[idx][1]
+
+
+def _select_routing_mode():
+    print("\n--- Select routing mode ---")
+    print("  1. Direct NAT       (AP traffic NAT'd through a chosen uplink)")
+    print("  2. VPN Gateway      (AP traffic NAT'd only through an existing VPN/tunnel iface)")
+    choice = input("Select mode (1-2, Enter to cancel): ").strip()
+    if choice == "1":
+        return "direct"
+    if choice == "2":
+        return "vpn"
+    print("Cancelled: no routing mode selected.")
+    return None
+
+
+def _select_uplink(adapters, ap_iface):
+    candidates = list_uplink_candidates(adapters)
+    candidates = [c for c in candidates if c["iface"] != ap_iface]
+    if not candidates:
+        print("Error: No uplink interface found.")
+        return None
+
+    print("\n--- Select uplink interface (Direct NAT) ---")
+    for i, c in enumerate(candidates, 1):
+        flag = " [default route]" if c["default_route"] else ""
+        print(f"  {i}. {c['iface']:<10} kind={c['kind']:<25} state={c['state']}{flag}")
+
+    choice = input(f"Select uplink (1-{len(candidates)}, Enter to cancel): ").strip()
+    if not choice.isdigit():
+        print("Cancelled: no uplink selected.")
+        return None
+    idx = int(choice) - 1
+    if not (0 <= idx < len(candidates)):
+        print("Cancelled: invalid selection.")
+        return None
+    selected = candidates[idx]["iface"]
+    if selected == ap_iface:
+        print("Error: Uplink cannot equal AP interface.")
+        return None
+    return selected
+
+
+def _select_vpn_iface(ap_iface):
+    candidates = list_vpn_interfaces()
+    up_candidates = [c for c in candidates if c["state"] == "up"]
+    if not up_candidates:
+        print("Error: No VPN/tunnel interface is up.")
+        if candidates:
+            print("       Detected but down: " + ", ".join(c["iface"] for c in candidates))
+        print("       Bring up your VPN (WireGuard / OpenVPN / Tailscale) first, then retry.")
+        print("       Ghostlink does not configure VPN providers in Phase 1.")
+        return None
+
+    print("\n--- Select VPN/tunnel interface (VPN Gateway) ---")
+    for i, c in enumerate(up_candidates, 1):
+        addr_str = "has-address" if c["has_address"] else "no-address"
+        print(f"  {i}. {c['iface']:<14} state={c['state']:<5} {addr_str}")
+
+    choice = input(f"Select VPN interface (1-{len(up_candidates)}, Enter to cancel): ").strip()
+    if not choice.isdigit():
+        print("Cancelled: no VPN interface selected.")
+        return None
+    idx = int(choice) - 1
+    if not (0 <= idx < len(up_candidates)):
+        print("Cancelled: invalid selection.")
+        return None
+    selected = up_candidates[idx]["iface"]
+    if selected == ap_iface:
+        print("Error: VPN interface cannot equal AP interface.")
+        return None
+    return selected
+
+
 def cmd_ap_start():
     adapters = detect_adapters()
-    ap_candidates = _external_role_ifaces(adapters, ["rtl88x2bu"])
-    uplink_candidates = _external_role_ifaces(adapters, ["rtl8812au", "mt7612u"])
-    ap_iface = ap_candidates[0][1] if ap_candidates else None
-    uplink_iface = uplink_candidates[0][1] if uplink_candidates else None
 
+    ap_iface = _select_ap_iface(adapters)
     if not ap_iface:
-        print("Error: RTL88x2BU adapter not detected for AP.")
-        return
-    if not uplink_iface:
-        print("Error: No uplink adapter (RTL8812AU or MT7612U) detected.")
         return
     if _is_management_iface(adapters, ap_iface):
-        print(f"Error: AP interface {ap_iface} is the management interface. Cannot use for AP.")
-        return
-    if _is_management_iface(adapters, uplink_iface):
-        print(f"Error: Uplink interface {uplink_iface} is the management interface. Cannot use for uplink.")
-        return
-    if ap_iface == uplink_iface:
-        print(f"Error: AP interface and uplink interface are the same ({ap_iface}). Cannot serve both roles.")
+        print(f"Error: AP interface {ap_iface} is the management interface. Refusing.")
         return
 
-    print(f"Starting Ghostlink-AP on {ap_iface} shared via {uplink_iface}...")
-    if not start_ap(ap_iface, uplink_iface):
+    mode = _select_routing_mode()
+    if not mode:
         return
-    
+
+    uplink_iface = None
+    vpn_iface = None
+    if mode == "direct":
+        uplink_iface = _select_uplink(adapters, ap_iface)
+        if not uplink_iface:
+            return
+        print(f"\nStarting Ghostlink-AP on {ap_iface} (Direct NAT via {uplink_iface})...")
+        ok = start_ap(ap_iface, uplink_iface, mode="direct")
+    else:
+        vpn_iface = _select_vpn_iface(ap_iface)
+        if not vpn_iface:
+            return
+        print(f"\nStarting Ghostlink-AP on {ap_iface} (VPN Gateway via {vpn_iface}) with kill-switch...")
+        ok = start_ap(ap_iface, uplink_iface=None, mode="vpn", vpn_iface=vpn_iface)
+
+    if not ok:
+        return
+
     print("Checking services...")
     time.sleep(2)
     if is_ghostlink_ap_running():
         print("[+] Ghostlink-AP is running (SSID: Ghostlink-AP, Password: Ghostlink123*)")
+        if mode == "vpn":
+            print(f"[+] AP-client traffic is restricted to {vpn_iface}. Kill-switch is active.")
+        else:
+            print(f"[+] AP-client traffic is NAT'd through {uplink_iface}.")
     else:
         print("[-] Failed to start AP services. Run 'ghostlink -diag' for more info.")
 
@@ -497,6 +624,21 @@ def cmd_diag():
     print(f"[+] Root Filesystem:       {root_line}")
     print(f"[+] Active Default Route:  {get_default_route_iface()}")
 
+    # Ghostlink-AP routing snapshot
+    _ap_state = get_ap_state() or {}
+    _ap_running = is_ghostlink_ap_running()
+    _ap_mode = _ap_state.get("mode") if _ap_running else "inactive"
+    _mode_label = {"direct": "Direct NAT", "vpn": "VPN Gateway", "inactive": "inactive"}.get(_ap_mode, _ap_mode or "inactive")
+    print(f"[+] Ghostlink-AP:          {'Active' if _ap_running else 'Inactive'} (mode: {_mode_label})")
+    if _ap_running:
+        print(f"    AP Interface:        {_ap_state.get('ap_iface', 'unknown')}  Subnet: {_ap_state.get('ap_subnet', '10.0.0.0/24')}")
+        if _ap_mode == "vpn":
+            print(f"    VPN Interface:       {_ap_state.get('vpn_iface', 'unknown')}  state={get_operstate(_ap_state.get('vpn_iface', '')) or 'unknown'}")
+            print(f"    Kill-switch:         {get_killswitch_status()}")
+        else:
+            print(f"    Uplink Interface:    {_ap_state.get('uplink_iface', 'unknown')}")
+            print(f"    Kill-switch:         not applicable (Direct NAT mode)")
+
     adapters = detect_adapters()
     mgmt = adapters.get("management")
     mgmt_label = mgmt if mgmt else "not detected"
@@ -544,7 +686,12 @@ def cmd_diag():
             print(f"- {tool}: Installed at {path}{version}")
         else:
             print(f"- {tool}: Missing")
-    for tool in ['airgeddon', 'tmux', 'aircrack-ng', 'hostapd', 'dnsmasq', 'iw', 'nmcli', 'nmap']:
+    extended_tools = [
+        'airgeddon', 'tmux', 'aircrack-ng', 'hostapd', 'dnsmasq', 'iw', 'nmcli', 'nmap',
+        'tshark', 'hashcat', 'hcxdumptool', 'hcxpcapngtool',
+        'reaver', 'bully', 'cowpatty', 'macchanger', 'sensors',
+    ]
+    for tool in extended_tools:
         path = _tool_path(tool)
         if path:
             version = ""
@@ -554,7 +701,7 @@ def cmd_diag():
             elif tool == 'tmux':
                 v_out, _ = run_cmd_no_check(f"{shlex.quote(path)} -V")
                 version = f" ({v_out.strip()})"
-            print(f"- {tool}: Installed at {path}{version}")
+            print(f"- {tool}: Installed ({path}){version}")
         else:
             print(f"- {tool}: Missing")
 

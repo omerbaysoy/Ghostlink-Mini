@@ -448,24 +448,208 @@ def _ap_cleanup_rules(ap_iface, uplink_iface):
         rules.extend(_ap_rules(ap_iface, uplink_iface, comment))
     return rules
 
-def start_ap(ap_iface, uplink_iface):
+
+# ---------------------------------------------------------------------------
+# VPN Gateway Phase 1
+# ---------------------------------------------------------------------------
+
+AP_KILLSWITCH_COMMENT = "ghostlink-ap-killswitch"
+AP_SUBNET = "10.0.0.0/24"
+VPN_IFACE_PREFIXES = ("wg", "tun", "tailscale", "ppp", "gpd", "proton", "nordlynx", "mullvad")
+
+
+def _all_link_interfaces():
+    """Return list of all interface names known to the kernel via /sys/class/net."""
+    try:
+        return [name for name in os.listdir("/sys/class/net") if name != "lo"]
+    except OSError:
+        return []
+
+
+def _iface_is_up(iface):
+    return get_operstate(iface) == "up"
+
+
+def _iface_has_address(iface):
+    out, code = run_cmd_no_check(f"ip -4 -o addr show dev {shlex.quote(iface)}")
+    return code == 0 and out.strip() != ""
+
+
+def list_uplink_candidates(adapters):
+    """Return list of dicts describing valid uplink candidates for Direct NAT mode.
+
+    Each entry: {"iface": <name>, "kind": <label>, "state": "up"|"down", "default_route": bool}.
+    Excludes the AP adapter itself and tunnel interfaces (those are VPN-mode candidates).
+    """
+    ap_iface = adapters.get("rtl88x2bu")
+    role_label = {
+        "rtl8812au": "RTL8812AU pentest/uplink",
+        "mt7612u": "MT7612U pentest/uplink",
+        "rtl8188eus": "RTL8188EUS backup",
+    }
+    results = []
+    seen = set()
+    default_iface = get_default_route_iface()
+
+    # Management onboard Wi-Fi (allowed to be selected as uplink intentionally)
+    mgmt = adapters.get("management")
+    if mgmt and mgmt != ap_iface and mgmt not in seen:
+        seen.add(mgmt)
+        results.append({
+            "iface": mgmt,
+            "kind": "management Wi-Fi",
+            "state": "up" if _iface_is_up(mgmt) else "down",
+            "default_route": (mgmt == default_iface),
+        })
+
+    # External pentest adapters as uplink (not AP, not tunnel)
+    for role in ("rtl8812au", "mt7612u", "rtl8188eus"):
+        iface = adapters.get(role)
+        if not iface or iface == ap_iface or iface in seen:
+            continue
+        seen.add(iface)
+        results.append({
+            "iface": iface,
+            "kind": role_label.get(role, role),
+            "state": "up" if _iface_is_up(iface) else "down",
+            "default_route": (iface == default_iface),
+        })
+
+    # Wired and other non-tunnel interfaces (eth0, usb0, etc.)
+    for iface in _all_link_interfaces():
+        if iface in seen or iface == ap_iface:
+            continue
+        if iface.startswith(VPN_IFACE_PREFIXES):
+            continue
+        # Skip if it's another wlan we already covered
+        if iface.startswith("wlan") and iface in seen:
+            continue
+        kind = "wired" if iface.startswith(("eth", "en")) else "other"
+        results.append({
+            "iface": iface,
+            "kind": kind,
+            "state": "up" if _iface_is_up(iface) else "down",
+            "default_route": (iface == default_iface),
+        })
+        seen.add(iface)
+
+    return results
+
+
+def list_vpn_interfaces():
+    """Return list of detected tunnel/VPN interface dicts: {"iface", "state", "has_address"}."""
+    results = []
+    for iface in _all_link_interfaces():
+        if not iface.startswith(VPN_IFACE_PREFIXES):
+            continue
+        results.append({
+            "iface": iface,
+            "state": "up" if _iface_is_up(iface) else "down",
+            "has_address": _iface_has_address(iface),
+        })
+    return results
+
+
+def _killswitch_rules(ap_iface, vpn_iface):
+    """Drop AP-subnet egress on every non-VPN interface; allow only via vpn_iface.
+
+    We anchor on AP_SUBNET so Pi host traffic (other source IPs) is not affected.
+    Rules are returned as (table, rule_string) tuples to plug into _iptables_add /
+    _iptables_delete_all. Order: ACCEPT-on-VPN inserted first, generic DROP after.
+    """
+    ap_q = shlex.quote(ap_iface)
+    vpn_q = shlex.quote(vpn_iface)
+    subnet_q = shlex.quote(AP_SUBNET)
+    comment = shlex.quote(AP_KILLSWITCH_COMMENT)
+    return [
+        # Permit AP subnet egress only via the chosen VPN interface
+        ("", f"FORWARD -i {ap_q} -s {subnet_q} -o {vpn_q} -m comment --comment {comment} -j ACCEPT"),
+        # Deny AP subnet egress through anything else
+        ("", f"FORWARD -i {ap_q} -s {subnet_q} ! -o {vpn_q} -m comment --comment {comment} -j DROP"),
+    ]
+
+
+def get_ap_state():
+    """Return the current AP state dict, or None if no AP is configured/running."""
+    if not os.path.exists(AP_STATE):
+        return None
+    try:
+        with open(AP_STATE, "r") as f:
+            return json.load(f)
+    except (OSError, ValueError):
+        return None
+
+
+def get_killswitch_status():
+    """Return killswitch summary string for the current AP state."""
+    state = get_ap_state()
+    if not state:
+        return "not applicable (AP inactive)"
+    if state.get("mode") != "vpn":
+        return "not applicable (Direct NAT mode)"
+    vpn_iface = state.get("vpn_iface")
+    if not vpn_iface:
+        return "not applicable (no VPN interface recorded)"
+    # Check whether our killswitch rules are present
+    comment = shlex.quote(AP_KILLSWITCH_COMMENT)
+    out, code = run_cmd_no_check(f"iptables -S FORWARD")
+    if code != 0:
+        return "unknown"
+    if AP_KILLSWITCH_COMMENT in out:
+        return f"active (allow via {vpn_iface}, drop via others)"
+    return "inactive (rules missing)"
+
+def start_ap(ap_iface, uplink_iface, mode="direct", vpn_iface=None):
+    """Start Ghostlink-AP.
+
+    mode="direct": NAT AP traffic out via uplink_iface (legacy behavior).
+    mode="vpn":    NAT AP traffic out via vpn_iface; install kill-switch so AP-subnet
+                   traffic cannot leak through any other interface.
+    """
     if not require_root("Starting Ghostlink-AP"):
         return False
     if not interface_exists(ap_iface):
         print(f"Error: AP interface {ap_iface} does not exist.")
         return False
-    if not interface_exists(uplink_iface):
-        print(f"Error: Uplink interface {uplink_iface} does not exist.")
-        return False
+
+    if mode == "vpn":
+        if not vpn_iface:
+            print("Error: VPN Gateway mode requires a VPN interface.")
+            return False
+        if not interface_exists(vpn_iface):
+            print(f"Error: VPN interface {vpn_iface} does not exist. Bring it up before starting AP.")
+            return False
+        if not _iface_is_up(vpn_iface):
+            print(f"Error: VPN interface {vpn_iface} is not up. AP will not start (fail closed).")
+            return False
+        if vpn_iface == ap_iface:
+            print(f"Error: VPN interface {vpn_iface} cannot equal AP interface.")
+            return False
+        # Egress nominally happens via the VPN interface
+        egress_iface = vpn_iface
+    else:
+        if not uplink_iface:
+            print("Error: Direct NAT mode requires an uplink interface.")
+            return False
+        if not interface_exists(uplink_iface):
+            print(f"Error: Uplink interface {uplink_iface} does not exist.")
+            return False
+        if uplink_iface == ap_iface:
+            print(f"Error: Uplink interface cannot equal AP interface ({ap_iface}).")
+            return False
+        egress_iface = uplink_iface
 
     _ensure_runtime_dir()
-    stop_ap(ap_iface, uplink_iface)
+    # Stop only this AP's prior instance (state file knows previous egress)
+    prev_state = get_ap_state()
+    prev_egress = (prev_state or {}).get("uplink_iface") or (prev_state or {}).get("vpn_iface") or egress_iface
+    stop_ap(ap_iface, prev_egress)
 
     run_cmd(f"nmcli device set {shlex.quote(ap_iface)} managed no")
     run_cmd(f"ip link set {shlex.quote(ap_iface)} up")
     run_cmd_no_check(f"ip addr flush dev {shlex.quote(ap_iface)}")
     run_cmd(f"ip addr add 10.0.0.1/24 dev {shlex.quote(ap_iface)}")
-    
+
     dnsmasq_conf = f"""
 interface={ap_iface}
 bind-interfaces
@@ -477,7 +661,7 @@ dhcp-option=option:dns-server,8.8.8.8,8.8.4.4
 """
     with open(DNSMASQ_CONF, "w") as f:
         f.write(dnsmasq_conf)
-        
+
     hostapd_conf = f"""
 interface={ap_iface}
 driver=nl80211
@@ -495,13 +679,28 @@ rsn_pairwise=CCMP
 """
     with open(HOSTAPD_CONF, "w") as f:
         f.write(hostapd_conf)
-        
+
     run_cmd("sysctl -w net.ipv4.ip_forward=1")
-    for table, rule in _ap_rules(ap_iface, uplink_iface):
+
+    # NAT/forwarding rules toward the egress interface
+    for table, rule in _ap_rules(ap_iface, egress_iface):
         _iptables_add(table, rule)
 
+    # VPN mode: install kill-switch (allow AP subnet via vpn_iface, drop elsewhere)
+    if mode == "vpn":
+        for table, rule in _killswitch_rules(ap_iface, vpn_iface):
+            _iptables_add(table, rule)
+
+    state = {
+        "ap_iface": ap_iface,
+        "mode": mode,
+        "uplink_iface": uplink_iface if mode == "direct" else None,
+        "vpn_iface": vpn_iface if mode == "vpn" else None,
+        "ap_subnet": AP_SUBNET,
+        "last_started_at": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
+    }
     with open(AP_STATE, "w") as f:
-        json.dump({"ap_iface": ap_iface, "uplink_iface": uplink_iface}, f)
+        json.dump(state, f)
 
     dnsmasq_out, dnsmasq_code = run_cmd_no_check(
         "dnsmasq "
@@ -513,7 +712,7 @@ rsn_pairwise=CCMP
     _, dnsmasq_ok = _pid_matches(DNSMASQ_PID, DNSMASQ_CONF)
     if dnsmasq_code != 0 or not dnsmasq_ok:
         print(f"Error: dnsmasq failed to start. See {AP_LOG}")
-        stop_ap(ap_iface, uplink_iface)
+        stop_ap(ap_iface, egress_iface)
         return False
 
     hostapd_out, hostapd_code = run_cmd_no_check(
@@ -524,29 +723,32 @@ rsn_pairwise=CCMP
     _, hostapd_ok = _pid_matches(HOSTAPD_PID, HOSTAPD_CONF)
     if hostapd_code != 0 or not hostapd_ok:
         print(f"Error: hostapd failed to start. See {AP_LOG}")
-        stop_ap(ap_iface, uplink_iface)
+        stop_ap(ap_iface, egress_iface)
         return False
-    
+
     return True
 
 def stop_ap(ap_iface, uplink_iface):
     if not require_root("Stopping Ghostlink-AP"):
         return False
 
-    if (not ap_iface or not uplink_iface) and os.path.exists(AP_STATE):
-        try:
-            with open(AP_STATE, "r") as f:
-                state = json.load(f)
-            ap_iface = ap_iface or state.get("ap_iface")
-            uplink_iface = uplink_iface or state.get("uplink_iface")
-        except Exception:
-            pass
+    state = get_ap_state() or {}
+    if not ap_iface:
+        ap_iface = state.get("ap_iface")
+    if not uplink_iface:
+        uplink_iface = state.get("uplink_iface") or state.get("vpn_iface")
+    state_vpn_iface = state.get("vpn_iface")
 
     _stop_pid(HOSTAPD_PID, HOSTAPD_CONF)
     _stop_pid(DNSMASQ_PID, DNSMASQ_CONF)
 
     if ap_iface and uplink_iface:
         for table, rule in _ap_cleanup_rules(ap_iface, uplink_iface):
+            _iptables_delete_all(table, rule)
+
+    # VPN mode kill-switch cleanup (state-driven so it survives blank arg calls)
+    if ap_iface and state_vpn_iface:
+        for table, rule in _killswitch_rules(ap_iface, state_vpn_iface):
             _iptables_delete_all(table, rule)
 
     if ap_iface:

@@ -549,7 +549,9 @@ WIFITE_WRAPPER
 verify_tools() {
     log "--- Tool Verification ---"
     local _tool _path _wifite_path _wifite2_path
-    for _tool in nmap aircrack-ng hostapd dnsmasq iw nmcli tmux airgeddon; do
+    for _tool in nmap aircrack-ng hostapd dnsmasq iw nmcli tmux airgeddon \
+                 tshark hashcat hcxdumptool hcxpcapngtool reaver bully cowpatty \
+                 macchanger sensors; do
         _path="$(command -v "$_tool" 2>/dev/null || true)"
         if [ -n "$_path" ]; then
             log "[+] $_tool: $_path"
@@ -1267,8 +1269,23 @@ log "[+] Updating apt repositories..."
 run_logged apt-get update -y || { log "[-] Failed to update apt"; exit 1; }
 
 log "[+] Installing system dependencies..."
-DEPENDENCIES=(git rsync dkms build-essential bc libelf-dev aircrack-ng hostapd dnsmasq iw rfkill iproute2 iptables wireless-tools python3 python3-pip network-manager nmap zram-tools tmux)
+DEPENDENCIES=(git rsync dkms build-essential bc libelf-dev aircrack-ng hostapd dnsmasq iw rfkill iproute2 iptables wireless-tools python3 python3-pip network-manager nmap zram-tools tmux lm-sensors macchanger reaver bully cowpatty)
+# Wifite optional/recommended tools (best-effort; may be unavailable on minimal images)
+WIFITE_OPTIONAL_DEPS=(tshark hashcat hcxdumptool hcxtools)
 run_logged apt-get install -y "${DEPENDENCIES[@]}" || { log "[-] Failed to install dependencies. See $SETUP_LOG"; exit 1; }
+
+log "[+] Installing Wifite optional dependencies (tshark, hashcat, hcxdumptool, hcxtools)..."
+for _opt_pkg in "${WIFITE_OPTIONAL_DEPS[@]}"; do
+    if apt_package_available "$_opt_pkg"; then
+        if run_logged apt-get install -y "$_opt_pkg"; then
+            log "[+] Optional Wifite dep installed: $_opt_pkg"
+        else
+            log "[!] Optional Wifite dep failed to install: $_opt_pkg (Wifite may have reduced functionality)"
+        fi
+    else
+        log "[!] Optional Wifite dep not available from apt: $_opt_pkg (Wifite may have reduced functionality)"
+    fi
+done
 
 PYTHONDONTWRITEBYTECODE=1 python3 "$INSTALL_DIR/$SRC_ENTRY" -db >>"$SETUP_LOG" 2>&1 || log "[!] Database initialization/status check reported a warning. Run ghostlink -db for details."
 set_runtime_permissions

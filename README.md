@@ -71,13 +71,33 @@ System-wide tool installation (usable outside Ghostlink):
 
 | Tool | Path | Source |
 |---|---|---|
-| `wifite` | `/usr/local/bin/wifite` | wrapper to `python3 /opt/wifite2/Wifite.py` (kimocoder/wifite2) |
-| `wifite2` | `/usr/local/bin/wifite2` | alias for `wifite` |
+| `wifite` / `wifite2` | `/usr/local/bin/wifite` and `/usr/local/bin/wifite2` | wrappers to `python3 /opt/wifite2/Wifite.py` (kimocoder/wifite2) |
 | `airgeddon` | `/usr/local/bin/airgeddon` | symlink to `/opt/airgeddon/airgeddon.sh` (v1s1t0r1sh3r3) |
 | `nmap` | `/usr/bin/nmap` | apt package |
 | `aircrack-ng` | `/usr/bin/aircrack-ng` | apt package |
 | `tmux` | `/usr/bin/tmux` | apt package; required for Airgeddon headless mode |
 | `hostapd`, `dnsmasq` | `/usr/sbin/...` | apt packages used by Ghostlink-AP |
+
+Wifite dependency set (installed best-effort by setup):
+
+| Tool | Purpose |
+|---|---|
+| `aircrack-ng` | WPA/WEP cracking, monitor mode helpers |
+| `tshark` | Packet capture analysis (requires `wireshark-common`) |
+| `hashcat` | GPU/CPU hash cracking |
+| `hcxdumptool` | PMKID / EAPOL capture |
+| `hcxtools` (provides `hcxpcapngtool`) | hashcat-format conversion |
+| `reaver`, `bully` | WPS PIN attacks |
+| `cowpatty` | WPA-PSK rainbow-table attacks |
+| `macchanger` | MAC randomization |
+
+Optional Wifite tools (`tshark`, `hashcat`, `hcxdumptool`, `hcxtools`) are installed best-effort; setup logs warnings and continues if any are unavailable on the running distribution.
+
+System telemetry:
+
+| Tool | Purpose |
+|---|---|
+| `lm-sensors` (provides `sensors`) | Pi 5 / SBC temperature and voltage telemetry |
 
 Setup syncs the installed runtime to `/opt/ghostlink` and installs the global CLI command as `ghostlink`.
 
@@ -134,6 +154,25 @@ Interactive menu options include:
 > **Monitor mode**: The management/onboard Wi-Fi interface is never offered for monitor mode. Only external adapters that advertise monitor mode support can be toggled.
 
 > **Adapter roles**: Role assignment is automatic based on USB ID. The management interface is permanently excluded from all active roles (scan, pentest, AP, monitor).
+
+## Ghostlink-AP Routing (Phase 1)
+
+When you start Ghostlink-AP, the launcher walks through:
+
+1. **Select AP adapter** — RTL88x2BU is preferred; RTL8812AU / MT7612U / RTL8188EUS are accepted as fallbacks. The management interface is excluded.
+2. **Select routing mode** — `Direct NAT` or `VPN Gateway`.
+3. **Direct NAT** — pick any non-AP interface to NAT AP-client traffic through (`eth0`, `wlan0` management Wi-Fi, RTL8812AU, MT7612U, etc.). The default-route interface is flagged.
+4. **VPN Gateway (Phase 1)** — pick an existing tunnel interface. Ghostlink detects interfaces matching `wg*`, `tun*`, `tailscale0`, `proton*`, `nordlynx*`, `mullvad*`, `ppp*`, `gpd*` and lists only those that are up. AP-client traffic is NAT'd through the chosen tunnel and a kill-switch (`iptables -A FORWARD -i <ap> -s 10.0.0.0/24 ! -o <vpn> -j DROP`) prevents AP clients from leaking to other interfaces.
+
+**VPN Gateway Phase 1 scope:**
+
+- Ghostlink does **not** configure VPN providers. Bring up your WireGuard / OpenVPN / Tailscale tunnel before starting the AP.
+- Phase 1 routes AP clients through an already-up tunnel interface only.
+- The kill-switch applies to AP-client traffic only (anchored on the AP subnet `10.0.0.0/24`); the Pi's own management connectivity (SSH, etc.) is untouched.
+- If the chosen VPN interface is down or missing, Ghostlink-AP refuses to start (fail-closed).
+- `Stop Ghostlink-AP` removes both the NAT/forwarding rules and the kill-switch.
+
+**Not implemented in Phase 1** (future roadmap): Tor gateway, generic proxy gateway, VPN provider config import/management.
 
 ## Direct Commands
 
@@ -209,7 +248,8 @@ Sample output includes:
 - RTL8812AU USB presence check and DKMS state if interface is missing
 - MT7612U physical presence, mapped interface, driver binding, monitor support, and mt76 module state
 - Driver compatibility warnings for headers, DKMS, and candidate modules
-- Toolchain dependency status: `wifite`, `wifite2`, `airgeddon`, `tmux`, `nmap`, `aircrack-ng`, `hostapd`, `dnsmasq`, `iw`, `nmcli` (each with absolute path)
+- Ghostlink-AP routing snapshot: mode (`Direct NAT` / `VPN Gateway` / `inactive`), AP interface, AP subnet, uplink or VPN interface, kill-switch state
+- Toolchain dependency status: `wifite`, `wifite2`, `airgeddon`, `tmux`, `nmap`, `aircrack-ng`, `tshark`, `hashcat`, `hcxdumptool`, `hcxpcapngtool`, `reaver`, `bully`, `cowpatty`, `macchanger`, `sensors`, `hostapd`, `dnsmasq`, `iw`, `nmcli` (each with absolute path)
 - Headless environment detection (`DISPLAY`/`WAYLAND_DISPLAY`) and Airgeddon tmux readiness
 
 ## Real Tested USB Adapter IDs
@@ -262,7 +302,7 @@ Run these checks on target hardware after setup. Local Windows syntax checks do 
 - Raspberry Pi hardware validation must be performed per board and per kernel; Windows-local syntax checks do not count as hardware validation.
 - DKMS-based drivers (RTL8812AU, RTL88x2BU, RTL8188EUS) require kernel headers that match the running kernel. Setup will skip DKMS driver builds if headers are missing and still continue with MT7612U setup.
 - Pi 5 PCIe Gen 3 tuning only matters when compatible Pi 5 storage hardware is present.
-- VPN, proxy, Tor, and AP uplink-routing workflows are not implemented in this release.
+- AP routing supports Direct NAT and VPN Gateway Phase 1 (existing up tunnel interfaces only). Tor gateway, proxy gateway, and VPN provider import/management are future roadmap items.
 
 ## Roadmap
 
