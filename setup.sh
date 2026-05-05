@@ -501,22 +501,32 @@ install_airgeddon() {
     ln -sf /opt/airgeddon/airgeddon.sh /usr/local/bin/airgeddon
 }
 
-install_wifite2() {
-    log "[+] Installing latest Wifite2 from source (kimocoder/wifite2) system-wide..."
+install_wifite_latest() {
+    # Install/update the latest maintained Wifite implementation system-wide.
+    # The current upstream maintained fork is kimocoder/wifite2; this function
+    # follows that source today but the policy is "latest maintained Wifite",
+    # not "Wifite2 only". The canonical user-facing command is `wifite`;
+    # `wifite2` is provided as a compatibility alias pointing to the same code.
+    log "[+] Installing latest maintained Wifite implementation system-wide..."
+
     # Remove any apt-installed wifite that may shadow our system-wide install
     if dpkg -l wifite 2>/dev/null | grep -q "^ii"; then
+        log "[+] Removing apt-installed legacy 'wifite' package (older than maintained upstream)..."
         run_logged apt-get remove -y wifite || true
     fi
+
     if [ -d /opt/wifite2/.git ]; then
+        log "[+] Updating existing /opt/wifite2 git checkout to latest upstream..."
         run_logged git -C /opt/wifite2 pull --ff-only || return 1
     elif [ -e /opt/wifite2 ]; then
         log "[-] /opt/wifite2 exists but is not a git checkout. Move it aside and rerun setup."
         return 1
     else
+        log "[+] Cloning latest maintained Wifite (kimocoder/wifite2) into /opt/wifite2..."
         run_logged git clone https://github.com/kimocoder/wifite2.git /opt/wifite2 || return 1
     fi
 
-    # Resolve the real entry script (Wifite.py vs wifite.py)
+    # Resolve the real entry script (handles renames in upstream over time)
     local _wifite_entry=""
     for candidate in /opt/wifite2/Wifite.py /opt/wifite2/wifite.py /opt/wifite2/wifite2.py; do
         if [ -f "$candidate" ]; then
@@ -525,25 +535,59 @@ install_wifite2() {
         fi
     done
     if [ -z "$_wifite_entry" ]; then
-        log "[-] Wifite2 entry script not found under /opt/wifite2. Source layout may have changed."
+        log "[-] Wifite entry script not found under /opt/wifite2. Source layout may have changed upstream."
         return 1
     fi
 
-    # Remove any prior symlinks at the target paths so we install fresh wrappers
-    rm -f /usr/local/bin/wifite /usr/local/bin/wifite2
+    # Detect existing wrappers. Replace anything that is clearly Ghostlink-managed
+    # (i.e. references /opt/wifite2). Warn but do not stomp anything user-owned
+    # that points elsewhere.
+    for _path in /usr/local/bin/wifite /usr/local/bin/wifite2; do
+        if [ -e "$_path" ] || [ -L "$_path" ]; then
+            if [ -L "$_path" ] || grep -q "/opt/wifite2" "$_path" 2>/dev/null; then
+                rm -f "$_path"
+            else
+                log "[!] $_path exists and does not point to /opt/wifite2. Refusing to overwrite a non-Ghostlink wrapper."
+                log "[!] Inspect manually if you want Ghostlink to manage this wrapper."
+                continue
+            fi
+        fi
+    done
 
-    # Install a shell wrapper at /usr/local/bin/wifite that explicitly uses python3
+    # Canonical wrapper: /usr/local/bin/wifite -> python3 <entry>
     cat > /usr/local/bin/wifite <<WIFITE_WRAPPER
 #!/bin/bash
 exec python3 "$_wifite_entry" "\$@"
 WIFITE_WRAPPER
     chmod +x /usr/local/bin/wifite
 
-    # Provide /usr/local/bin/wifite2 as an alias so both names work system-wide
-    ln -sf /usr/local/bin/wifite /usr/local/bin/wifite2
+    # Compatibility alias /usr/local/bin/wifite2 -> /usr/local/bin/wifite
+    # (only created if we successfully installed the canonical wrapper)
+    if [ -x /usr/local/bin/wifite ]; then
+        ln -sf /usr/local/bin/wifite /usr/local/bin/wifite2
+    fi
 
-    log "[+] Wifite installed: /usr/local/bin/wifite -> python3 $_wifite_entry"
-    log "[+] Wifite alias: /usr/local/bin/wifite2 -> /usr/local/bin/wifite"
+    # Detect a clean version/source ref without parsing Wifite's banner art
+    local _wifite_ref=""
+    if [ -d /opt/wifite2/.git ]; then
+        _wifite_ref="$(git -C /opt/wifite2 describe --tags --always 2>/dev/null || true)"
+        if [ -z "$_wifite_ref" ]; then
+            _wifite_ref="$(git -C /opt/wifite2 rev-parse --short HEAD 2>/dev/null || true)"
+        fi
+    fi
+
+    log "[+] Wifite source: $_wifite_entry"
+    if [ -n "$_wifite_ref" ]; then
+        log "[+] Wifite git ref: $_wifite_ref"
+    fi
+    log "[+] Wifite canonical command: /usr/local/bin/wifite (-> python3 $_wifite_entry)"
+    log "[+] Wifite compatibility alias: /usr/local/bin/wifite2 (-> /usr/local/bin/wifite)"
+}
+
+# Backwards-compatible alias for any callers (or external scripts) that still
+# reference the older function name.
+install_wifite2() {
+    install_wifite_latest "$@"
 }
 
 verify_tools() {
@@ -1244,7 +1288,7 @@ if [ "$DRY_RUN" -eq 1 ]; then
     fi
     echo ""
     echo "  Drivers to prepare: RTL8812AU, MT7612U, RTL88x2BU, RTL8188EUS"
-    echo "  Tools to install  : Wifite2, Airgeddon, aircrack-ng, nmap, hostapd, dnsmasq"
+    echo "  Tools to install  : Latest maintained Wifite, Airgeddon, aircrack-ng, nmap, hostapd, dnsmasq"
     echo ""
     echo "  No changes made (--dry-run)."
     echo "======================================"
@@ -1304,7 +1348,7 @@ fi
 log_driver_compatibility_state
 
 install_airgeddon || log "[!] Failed to install Airgeddon. Run 'sudo ./setup.sh --update' to retry. See $SETUP_LOG"
-install_wifite2 || log "[!] Failed to install Wifite2. Run 'sudo ./setup.sh --update' to retry. See $SETUP_LOG"
+install_wifite_latest || log "[!] Failed to install latest Wifite implementation. Run 'sudo ./setup.sh --update' to retry. See $SETUP_LOG"
 
 configure_management_wifi || log "[!] Management Wi-Fi configuration was skipped or failed; existing network state was left alone."
 

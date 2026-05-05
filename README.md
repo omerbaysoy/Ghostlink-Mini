@@ -69,9 +69,14 @@ Setup installs and prepares all supported driver paths even when the adapters ar
 
 System-wide tool installation (usable outside Ghostlink):
 
+**Wifite policy.** Ghostlink installs the **latest maintained Wifite implementation** rather than locking to a specific historical fork. The canonical user-facing command is `wifite`; `wifite2` is provided as a compatibility alias because some workflows still reference that name. Both wrappers point to the same code. Setup runs `apt update` and installs dependency packages (aircrack-ng, tshark, hashcat, hcxdumptool, hcxtools, reaver, bully, cowpatty, macchanger, etc.) at the latest version available from the configured Debian / Raspberry Pi OS repositories. Optional packages that are unavailable on the running distribution log a warning and continue; required base packages still fail loudly.
+
+Today's maintained upstream is kimocoder/wifite2; setup pulls the latest commit from `https://github.com/kimocoder/wifite2.git` into `/opt/wifite2` and writes a wrapper that runs `python3 /opt/wifite2/Wifite.py`. If upstream is renamed or replaced, only the installer needs to change — the canonical command remains `wifite`.
+
 | Tool | Path | Source |
 |---|---|---|
-| `wifite` / `wifite2` | `/usr/local/bin/wifite` and `/usr/local/bin/wifite2` | wrappers to `python3 /opt/wifite2/Wifite.py` (kimocoder/wifite2) |
+| `wifite` (canonical) | `/usr/local/bin/wifite` | wrapper to `python3` + the latest maintained Wifite source (currently kimocoder/wifite2 in `/opt/wifite2`) |
+| `wifite2` (alias) | `/usr/local/bin/wifite2` | compatibility symlink pointing to the same `wifite` wrapper |
 | `airgeddon` | `/usr/local/bin/airgeddon` | symlink to `/opt/airgeddon/airgeddon.sh` (v1s1t0r1sh3r3) |
 | `nmap` | `/usr/bin/nmap` | apt package |
 | `aircrack-ng` | `/usr/bin/aircrack-ng` | apt package |

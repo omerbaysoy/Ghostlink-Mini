@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 import argparse
 import os
+import re
 import shlex
 import shutil
 import subprocess
@@ -145,8 +146,72 @@ def _tool_path(name):
     return shutil.which(name)
 
 def _wifite_command():
-    """Return the system-wide wifite command path, preferring 'wifite', falling back to 'wifite2'."""
+    """Return the canonical system-wide Wifite command, preferring 'wifite'.
+
+    Policy: install the latest maintained Wifite implementation. The canonical
+    user-facing command is `wifite`; `wifite2` is a compatibility alias.
+    Returns the absolute path of whichever resolves first, or None.
+    """
     return _tool_path("wifite") or _tool_path("wifite2")
+
+
+def _wifite_implementation_info():
+    """Inspect installed Wifite wrapper(s) and return diagnostic info dict.
+
+    Returns dict with keys:
+      wifite_path:    path of `wifite` if installed, else None
+      wifite2_path:   path of `wifite2` if installed, else None
+      source:         the entry .py file the wrapper executes (or None)
+      git_ref:        git describe/short-ref of the source dir, if a checkout
+      both_same:      True if `wifite` and `wifite2` resolve to the same code
+    Never parses Wifite banner art for a version string.
+    """
+    info = {
+        "wifite_path": _tool_path("wifite"),
+        "wifite2_path": _tool_path("wifite2"),
+        "source": None,
+        "git_ref": None,
+        "both_same": False,
+    }
+
+    # Resolve the python entry script that the canonical wrapper executes.
+    canonical = info["wifite_path"] or info["wifite2_path"]
+    if canonical:
+        try:
+            with open(canonical, "r") as f:
+                wrapper_text = f.read()
+            match = re.search(r"(/[^\s\"']+\.py)", wrapper_text)
+            if match:
+                info["source"] = match.group(1)
+        except (OSError, UnicodeDecodeError):
+            pass
+
+    # Determine if both wrappers point at the same implementation.
+    if info["wifite_path"] and info["wifite2_path"]:
+        try:
+            real_a = os.path.realpath(info["wifite_path"])
+            real_b = os.path.realpath(info["wifite2_path"])
+            info["both_same"] = (real_a == real_b)
+        except OSError:
+            info["both_same"] = False
+
+    # Git ref of the source repo (clean, no banner pollution).
+    if info["source"]:
+        src_dir = os.path.dirname(info["source"])
+        if os.path.isdir(os.path.join(src_dir, ".git")):
+            ref, code = run_cmd_no_check(
+                f"git -C {shlex.quote(src_dir)} describe --tags --always 2>/dev/null"
+            )
+            if code == 0 and ref.strip():
+                info["git_ref"] = ref.strip().splitlines()[0]
+            else:
+                ref, code = run_cmd_no_check(
+                    f"git -C {shlex.quote(src_dir)} rev-parse --short HEAD 2>/dev/null"
+                )
+                if code == 0 and ref.strip():
+                    info["git_ref"] = ref.strip().splitlines()[0]
+    return info
+
 
 def _is_headless_env():
     return not os.environ.get("DISPLAY") and not os.environ.get("WAYLAND_DISPLAY")
@@ -677,15 +742,28 @@ def cmd_diag():
             print("  - Next action: Try 'sudo modprobe 88XXau' or 'sudo modprobe 8812au'. Replug adapter. Consider 'sudo ./setup.sh --update'.")
 
     print("\nDependencies:")
-    # Wifite has two acceptable system-wide names
-    for tool in ['wifite', 'wifite2']:
-        path = _tool_path(tool)
-        if path:
-            v_out, v_code = run_cmd_no_check(f"{shlex.quote(path)} --version 2>/dev/null | head -n 1")
-            version = f" ({v_out.strip()})" if v_code == 0 and v_out.strip() else ""
-            print(f"- {tool}: Installed at {path}{version}")
+    # Wifite: do NOT parse `--version` — Wifite prints ASCII banner art on stdout
+    # which produced garbage version strings in earlier diagnostics. Instead,
+    # read the wrapper script to find its python entry, then use git ref of the
+    # source repo for a clean implementation/version label.
+    wf = _wifite_implementation_info()
+    impl_label = "latest maintained Wifite implementation"
+    if wf["wifite_path"]:
+        details = [impl_label]
+        if wf["source"]:
+            details.append(f"source={wf['source']}")
+        if wf["git_ref"]:
+            details.append(f"ref={wf['git_ref']}")
+        print(f"- wifite: Installed ({wf['wifite_path']}, {', '.join(details)})")
+    else:
+        print("- wifite: Missing")
+    if wf["wifite2_path"]:
+        if wf["both_same"]:
+            print(f"- wifite2: Installed ({wf['wifite2_path']}, compatibility alias for wifite)")
         else:
-            print(f"- {tool}: Missing")
+            print(f"- wifite2: Installed ({wf['wifite2_path']}, WARNING: differs from wifite — possibly stale)")
+    else:
+        print("- wifite2: Missing")
     extended_tools = [
         'airgeddon', 'tmux', 'aircrack-ng', 'hostapd', 'dnsmasq', 'iw', 'nmcli', 'nmap',
         'tshark', 'hashcat', 'hcxdumptool', 'hcxpcapngtool',
