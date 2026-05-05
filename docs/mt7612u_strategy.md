@@ -85,6 +85,8 @@ The RTL8812AU blacklist only blacklists `rtw_8812au`, `rtw88_8812au`, and `rtl8x
 
 ## Troubleshooting
 
+`ghostlink -diag` reports detected USB Wi-Fi devices, MT7612U physical presence, the mapped MT7612U interface, driver binding, monitor mode support, and loaded mt76 modules. It warns when MT7612U USB hardware is present but no network interface is bound, or when the mapped interface is not bound to the mt76x2u/mt76usb stack.
+
 ### MT7612U USB device plugged in but no wireless interface appears
 
 ```bash

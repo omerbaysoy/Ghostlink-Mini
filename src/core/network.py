@@ -3,6 +3,7 @@ import os
 import time
 import json
 import shlex
+import re
 from .config import (
     GHOSTLINK_LOG_DIR, load_adapter_map, save_adapter_map,
     RTL8812AU_USB_IDS, RTL88X2BU_USB_IDS, RTL8188EUS_USB_IDS, MT7612U_USB_IDS,
@@ -123,6 +124,39 @@ def mt7612u_usb_present():
         if code == 0 and out.strip():
             return True
     return False
+
+def list_usb_wifi_devices():
+    out, code = run_cmd_no_check("lsusb")
+    if code != 0 or not out:
+        return []
+
+    known_ids = (
+        RTL8812AU_USB_IDS
+        | RTL88X2BU_USB_IDS
+        | RTL8188EUS_USB_IDS
+        | MT7612U_USB_IDS
+    )
+    wifi_keywords = [
+        "802.11", "wireless", "wi-fi", "wifi", "wlan",
+        "realtek", "mediatek", "ralink", "alfa", "tp-link",
+        "edimax", "d-link", "asus", "linksys", "mt7612",
+        "rtl8812", "rtl8188", "rtl88",
+    ]
+
+    devices = []
+    for line in out.splitlines():
+        usb_id = None
+        match = re.search(r"\bID\s+([0-9A-Fa-f]{4}:[0-9A-Fa-f]{4})\b", line)
+        if match:
+            usb_id = match.group(1).lower()
+
+        lower_line = line.lower()
+        if usb_id in known_ids or any(keyword in lower_line for keyword in wifi_keywords):
+            devices.append({
+                "usb_id": usb_id or "unknown",
+                "description": line.strip(),
+            })
+    return devices
 
 def get_default_route_iface():
     for cmd in ["ip route get 1.1.1.1", "ip route show default"]:

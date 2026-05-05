@@ -183,8 +183,9 @@ Sample output includes:
 - ZRAM status
 - Overclock and GPU memory status
 - Adapter map: role -> interface -> driver -> monitor mode support
+- Detected USB Wi-Fi devices from `lsusb`
 - RTL8812AU USB presence check and DKMS state if interface is missing
-- MT7612U USB presence check and mt76 module state if interface is missing
+- MT7612U physical presence, mapped interface, driver binding, monitor support, and mt76 module state
 - Driver compatibility warnings for headers, DKMS, and candidate modules
 - Toolchain dependency status
 

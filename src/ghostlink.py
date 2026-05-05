@@ -15,7 +15,7 @@ from core.network import (
     check_internet, start_ap, stop_ap, restart_networking, run_cmd_no_check,
     is_ghostlink_ap_running, interface_exists, get_connected_ssid,
     is_wireless_interface, get_driver, get_operstate, get_default_route_iface,
-    mt7612u_usb_present,
+    mt7612u_usb_present, list_usb_wifi_devices,
 )
 from core.pentest import start_pentest, check_monitor_mode
 from core.platform import (
@@ -432,6 +432,49 @@ def _iface_current_mode(iface):
     return "unknown"
 
 
+def _print_usb_wifi_devices():
+    print("\nDetected USB Wi-Fi Devices:")
+    devices = list_usb_wifi_devices()
+    if not devices:
+        print("- None reported by lsusb")
+        return
+    for device in devices:
+        print(f"- {device['description']}")
+
+
+def _print_mt7612u_diagnostics(adapters):
+    mt_iface = adapters.get("mt7612u")
+    mt_present = mt7612u_usb_present()
+
+    print("\nMT7612U Diagnostics:")
+    print(f"- Physical USB presence: {'Yes' if mt_present else 'No'}")
+    print(f"- Mapped interface: {mt_iface if mt_iface else 'Missing'}")
+
+    if mt_iface:
+        driver = get_driver(mt_iface)
+        support = "Yes" if check_monitor_mode(mt_iface) else "No"
+        print(f"- Driver binding: {driver}")
+        print(f"- Monitor mode support: {support}")
+        if driver not in ["mt76x2u", "mt76usb"]:
+            print("[!] WARNING: MT7612U is mapped by USB ID but is not bound to the mt76x2u/mt76usb stack.")
+    elif mt_present:
+        print("[!] WARNING: MT7612U USB device present but no network interface is bound")
+
+    lsmod_out, _ = run_cmd_no_check("lsmod | grep mt76")
+    loaded_mods = [line.split()[0] for line in lsmod_out.splitlines() if line.strip()]
+    print(f"- Loaded mt76 modules: {', '.join(loaded_mods) if loaded_mods else 'None'}")
+
+    _, mi_code = run_cmd_no_check("modinfo mt76x2u")
+    if mi_code == 0:
+        print("- mt76x2u module: Available in kernel")
+        if mt_present and not mt_iface:
+            print("- Next action: Try 'sudo modprobe mt76x2u'. Replug adapter.")
+    else:
+        print("- mt76x2u module: Missing from this kernel build")
+        if mt_present and not mt_iface:
+            print("- Next action: Check 'sudo apt-get install firmware-misc-nonfree'. Replug adapter.")
+
+
 def cmd_diag():
     print("\n--- Diagnostics ---")
     platform_info = print_platform_overview(show_driver_warnings=True)
@@ -457,6 +500,9 @@ def cmd_diag():
             print(f"  Monitor mode support: {support}")
             print(f"  Current mode: {_iface_current_mode(iface)}")
 
+    _print_usb_wifi_devices()
+    _print_mt7612u_diagnostics(adapters)
+
     if not adapters.get("rtl8812au"):
         out, code = run_cmd_no_check("lsusb -d 0bda:8812")
         if code == 0 and out.strip():
@@ -477,22 +523,6 @@ def cmd_diag():
 
             print("  - Next action: Try 'sudo modprobe 88XXau' or 'sudo modprobe 8812au'. Replug adapter. Consider 'sudo ./setup.sh --update'.")
 
-    if not adapters.get("mt7612u") and mt7612u_usb_present():
-        print("\n[!] WARNING: MT7612U USB device present but no network interface is bound")
-        print("  - Candidate modules: mt76x2u, mt76usb")
-
-        lsmod_out, _ = run_cmd_no_check("lsmod | grep mt76")
-        loaded_mods = [line.split()[0] for line in lsmod_out.splitlines() if line.strip()]
-        print(f"  - Loaded mt76 modules: {', '.join(loaded_mods) if loaded_mods else 'None'}")
-
-        mi_out, mi_code = run_cmd_no_check("modinfo mt76x2u")
-        if mi_code == 0:
-            print("  - mt76x2u: Available in kernel")
-            print("  - Next action: Try 'sudo modprobe mt76x2u'. Replug adapter.")
-        else:
-            print("  - mt76x2u: Not available in this kernel build")
-            print("  - Next action: Check 'sudo apt-get install firmware-misc-nonfree'. Replug adapter.")
-            
     print("\nDependencies:")
     for tool in ['wifite', 'airgeddon', 'aircrack-ng', 'hostapd', 'dnsmasq', 'iw', 'nmcli', 'nmap']:
         out, code = run_cmd_no_check(f"which {tool}")
