@@ -502,8 +502,9 @@ install_airgeddon() {
 }
 
 install_wifite2() {
-    log "[+] Installing latest Wifite2 from source (kimocoder/wifite2)..."
-    if command -v wifite >/dev/null 2>&1; then
+    log "[+] Installing latest Wifite2 from source (kimocoder/wifite2) system-wide..."
+    # Remove any apt-installed wifite that may shadow our system-wide install
+    if dpkg -l wifite 2>/dev/null | grep -q "^ii"; then
         run_logged apt-get remove -y wifite || true
     fi
     if [ -d /opt/wifite2/.git ]; then
@@ -514,7 +515,66 @@ install_wifite2() {
     else
         run_logged git clone https://github.com/kimocoder/wifite2.git /opt/wifite2 || return 1
     fi
-    ln -sf /opt/wifite2/Wifite.py /usr/local/bin/wifite
+
+    # Resolve the real entry script (Wifite.py vs wifite.py)
+    local _wifite_entry=""
+    for candidate in /opt/wifite2/Wifite.py /opt/wifite2/wifite.py /opt/wifite2/wifite2.py; do
+        if [ -f "$candidate" ]; then
+            _wifite_entry="$candidate"
+            break
+        fi
+    done
+    if [ -z "$_wifite_entry" ]; then
+        log "[-] Wifite2 entry script not found under /opt/wifite2. Source layout may have changed."
+        return 1
+    fi
+
+    # Remove any prior symlinks at the target paths so we install fresh wrappers
+    rm -f /usr/local/bin/wifite /usr/local/bin/wifite2
+
+    # Install a shell wrapper at /usr/local/bin/wifite that explicitly uses python3
+    cat > /usr/local/bin/wifite <<WIFITE_WRAPPER
+#!/bin/bash
+exec python3 "$_wifite_entry" "\$@"
+WIFITE_WRAPPER
+    chmod +x /usr/local/bin/wifite
+
+    # Provide /usr/local/bin/wifite2 as an alias so both names work system-wide
+    ln -sf /usr/local/bin/wifite /usr/local/bin/wifite2
+
+    log "[+] Wifite installed: /usr/local/bin/wifite -> python3 $_wifite_entry"
+    log "[+] Wifite alias: /usr/local/bin/wifite2 -> /usr/local/bin/wifite"
+}
+
+verify_tools() {
+    log "--- Tool Verification ---"
+    local _tool _path _wifite_path _wifite2_path
+    for _tool in nmap aircrack-ng hostapd dnsmasq iw nmcli tmux airgeddon; do
+        _path="$(command -v "$_tool" 2>/dev/null || true)"
+        if [ -n "$_path" ]; then
+            log "[+] $_tool: $_path"
+        else
+            log "[!] $_tool: not found in PATH"
+        fi
+    done
+    _wifite_path="$(command -v wifite 2>/dev/null || true)"
+    _wifite2_path="$(command -v wifite2 2>/dev/null || true)"
+    if [ -n "$_wifite_path" ] || [ -n "$_wifite2_path" ]; then
+        log "[+] wifite: ${_wifite_path:-not found}"
+        log "[+] wifite2: ${_wifite2_path:-not found}"
+    else
+        log "[!] wifite/wifite2: neither command is on PATH"
+    fi
+    if [ -z "${DISPLAY:-}" ] && [ -z "${WAYLAND_DISPLAY:-}" ]; then
+        if command -v tmux >/dev/null 2>&1; then
+            log "[+] Headless environment detected; tmux is available for Airgeddon headless mode."
+            log "[+] Inside Airgeddon: Options menu -> enable headless tmux mode if it does not auto-detect."
+        else
+            log "[!] Headless environment detected and tmux is missing; Airgeddon will not run interactively."
+        fi
+    else
+        log "[+] Graphical environment detected (DISPLAY or WAYLAND_DISPLAY set)."
+    fi
 }
 
 kernel_headers_available() {
@@ -1207,7 +1267,7 @@ log "[+] Updating apt repositories..."
 run_logged apt-get update -y || { log "[-] Failed to update apt"; exit 1; }
 
 log "[+] Installing system dependencies..."
-DEPENDENCIES=(git rsync dkms build-essential bc libelf-dev aircrack-ng hostapd dnsmasq iw rfkill iproute2 iptables wireless-tools python3 python3-pip network-manager nmap zram-tools)
+DEPENDENCIES=(git rsync dkms build-essential bc libelf-dev aircrack-ng hostapd dnsmasq iw rfkill iproute2 iptables wireless-tools python3 python3-pip network-manager nmap zram-tools tmux)
 run_logged apt-get install -y "${DEPENDENCIES[@]}" || { log "[-] Failed to install dependencies. See $SETUP_LOG"; exit 1; }
 
 PYTHONDONTWRITEBYTECODE=1 python3 "$INSTALL_DIR/$SRC_ENTRY" -db >>"$SETUP_LOG" 2>&1 || log "[!] Database initialization/status check reported a warning. Run ghostlink -db for details."
@@ -1272,6 +1332,8 @@ else
     log "[-] 'ghostlink' command failed to install."
     exit 1
 fi
+
+verify_tools
 
 ghostlink -diag >>"$SETUP_LOG" 2>&1 || log "[!] ghostlink -diag reported warnings. See $SETUP_LOG"
 

@@ -1,6 +1,10 @@
 # Ghostlink
 
-Ghostlink is a Raspberry Pi / Debian SBC pentest CLI platform for managing external wireless adapters, launching Wi-Fi assessment tools, running network discovery, and preparing a portable multi-adapter field workflow.
+Ghostlink is a Raspberry Pi / Debian SBC pentest CLI platform for multi-adapter wireless assessment, tool orchestration, AP/uplink workflows, network discovery, and field diagnostics.
+
+The tools Ghostlink prepares (Wifite, Airgeddon, Nmap, aircrack-ng, hostapd, dnsmasq, tmux) are installed system-wide and remain usable outside Ghostlink. The CLI command is `ghostlink`. Setup installs the runtime to `/opt/ghostlink` and registers `/usr/local/bin/ghostlink`.
+
+Validated on Raspberry Pi 5 / Debian Trixie / arm64 / kernel 6.12.x with all four supported USB Wi-Fi adapters (RTL8812AU, MT7612U, RTL88x2BU, RTL8188EUS) and onboard `brcmfmac` management Wi-Fi.
 
 ## Platform Support
 
@@ -62,7 +66,18 @@ Setup installs and prepares all supported driver paths even when the adapters ar
 - RTL88x2BU driver via lwfinger/rtw88 for the AP role
 - RTL8188EUS backup driver
 - MT7612U in-kernel mt76 module check and `firmware-misc-nonfree`
-- Wifite2, Airgeddon, aircrack-ng, nmap, and other toolchain dependencies
+
+System-wide tool installation (usable outside Ghostlink):
+
+| Tool | Path | Source |
+|---|---|---|
+| `wifite` | `/usr/local/bin/wifite` | wrapper to `python3 /opt/wifite2/Wifite.py` (kimocoder/wifite2) |
+| `wifite2` | `/usr/local/bin/wifite2` | alias for `wifite` |
+| `airgeddon` | `/usr/local/bin/airgeddon` | symlink to `/opt/airgeddon/airgeddon.sh` (v1s1t0r1sh3r3) |
+| `nmap` | `/usr/bin/nmap` | apt package |
+| `aircrack-ng` | `/usr/bin/aircrack-ng` | apt package |
+| `tmux` | `/usr/bin/tmux` | apt package; required for Airgeddon headless mode |
+| `hostapd`, `dnsmasq` | `/usr/sbin/...` | apt packages used by Ghostlink-AP |
 
 Setup syncs the installed runtime to `/opt/ghostlink` and installs the global CLI command as `ghostlink`.
 
@@ -110,7 +125,11 @@ Interactive menu options include:
 | 13 | Monitor mode toggle |
 | 14 | Exit |
 
-> **Airgeddon note**: Ghostlink validates the selected external adapter and blocks the management interface before launching Airgeddon. Airgeddon may still display its own interface picker - select the validated adapter inside Airgeddon. Never select the management/onboard Wi-Fi inside Airgeddon.
+> **Wifite launcher**: Start Wifite first lists external pentest-capable adapters (RTL8812AU, MT7612U, RTL8188EUS, RTL88x2BU as last resort) excluding the management interface. After adapter selection, you can optionally provide a target SSID/BSSID; pressing Enter at the SSID prompt launches Wifite interactively on the selected adapter so you can pick targets from a Wifite scan. The management interface is never offered.
+
+> **Airgeddon headless on Raspberry Pi**: When `DISPLAY` and `WAYLAND_DISPLAY` are both unset (typical for SSH/serial sessions), Ghostlink expects `tmux` to be installed and warns if it is missing. Airgeddon may still report "no graphics system detected" on first launch — open its Options menu and enable headless/tmux mode, then return to the main menu. Ghostlink validates the selected external adapter and blocks the management interface before launching Airgeddon, but Airgeddon may still display its own interface picker — select the validated adapter inside Airgeddon. Never select the management/onboard Wi-Fi inside Airgeddon.
+
+> **Nmap launcher**: Start Nmap requires nmap to be installed system-wide; if missing, it shows `Run sudo ./setup.sh --update`. Pressing Enter at the target prompt cancels with `Cancelled: no Nmap target provided.` (no silent return, no fake failed scan job).
 
 > **Monitor mode**: The management/onboard Wi-Fi interface is never offered for monitor mode. Only external adapters that advertise monitor mode support can be toggled.
 
@@ -183,12 +202,28 @@ Sample output includes:
 - OS, codename, architecture, and kernel
 - ZRAM status
 - Overclock and GPU memory status
-- Adapter map: role -> interface -> driver -> monitor mode support
+- Pi 5 fan config status and Pi 5 NVMe-aware filesystem expansion behavior
+- Adapter map: role -> interface -> driver -> monitor mode support -> current mode
+- Management interface protection status
 - Detected USB Wi-Fi devices from `lsusb`
 - RTL8812AU USB presence check and DKMS state if interface is missing
 - MT7612U physical presence, mapped interface, driver binding, monitor support, and mt76 module state
 - Driver compatibility warnings for headers, DKMS, and candidate modules
-- Toolchain dependency status
+- Toolchain dependency status: `wifite`, `wifite2`, `airgeddon`, `tmux`, `nmap`, `aircrack-ng`, `hostapd`, `dnsmasq`, `iw`, `nmcli` (each with absolute path)
+- Headless environment detection (`DISPLAY`/`WAYLAND_DISPLAY`) and Airgeddon tmux readiness
+
+## Real Tested USB Adapter IDs
+
+Confirmed on Raspberry Pi 5 / Trixie / arm64 with all four adapters connected simultaneously:
+
+| USB ID | Chipset | Role | Driver bound |
+|---|---|---|---|
+| `0bda:8812` | RTL8812AU | Pentest/uplink #1 | `88XXau` |
+| `0e8d:7612` | MT7612U | Pentest/uplink #2 | `mt76x2u` |
+| `0bda:b812` | RTL88x2BU | Ghostlink-AP | `rtw_8822bu` |
+| `2357:010c` | RTL8188EUS | Backup pentest | `8188eu` |
+
+The onboard Pi 5 Wi-Fi (`brcmfmac`) is mapped to `management` and is excluded from every active role.
 
 ## MT7612U Troubleshooting Commands
 
@@ -220,6 +255,14 @@ Run these checks on target hardware after setup. Local Windows syntax checks do 
 - [ ] Management interface is never used for scan or pentest
 - [ ] `ghostlink -ap-start` starts AP on RTL88x2BU, uplink via RTL8812AU or MT7612U
 - [ ] Internet is accessible through the uplink adapter during AP operation
+
+## Known Limitations
+
+- Airgeddon may still ask the user to select the validated adapter inside its own UI; Ghostlink does not enforce Airgeddon's interface picker.
+- Raspberry Pi hardware validation must be performed per board and per kernel; Windows-local syntax checks do not count as hardware validation.
+- DKMS-based drivers (RTL8812AU, RTL88x2BU, RTL8188EUS) require kernel headers that match the running kernel. Setup will skip DKMS driver builds if headers are missing and still continue with MT7612U setup.
+- Pi 5 PCIe Gen 3 tuning only matters when compatible Pi 5 storage hardware is present.
+- VPN, proxy, Tor, and AP uplink-routing workflows are not implemented in this release.
 
 ## Roadmap
 

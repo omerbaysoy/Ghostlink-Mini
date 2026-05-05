@@ -2,6 +2,7 @@
 import argparse
 import os
 import shlex
+import shutil
 import subprocess
 import sys
 import time
@@ -126,6 +127,16 @@ def _is_management_iface(adapters, iface):
     if iface == adapters.get("management"):
         return True
     return get_driver(iface) in ["brcmfmac", "brcmsmac"]
+
+def _tool_path(name):
+    return shutil.which(name)
+
+def _wifite_command():
+    """Return the system-wide wifite command path, preferring 'wifite', falling back to 'wifite2'."""
+    return _tool_path("wifite") or _tool_path("wifite2")
+
+def _is_headless_env():
+    return not os.environ.get("DISPLAY") and not os.environ.get("WAYLAND_DISPLAY")
 
 def cmd_status():
     print_banner()
@@ -524,19 +535,39 @@ def cmd_diag():
             print("  - Next action: Try 'sudo modprobe 88XXau' or 'sudo modprobe 8812au'. Replug adapter. Consider 'sudo ./setup.sh --update'.")
 
     print("\nDependencies:")
-    for tool in ['wifite', 'airgeddon', 'aircrack-ng', 'hostapd', 'dnsmasq', 'iw', 'nmcli', 'nmap']:
-        out, code = run_cmd_no_check(f"which {tool}")
-        if code == 0:
-            version = ""
-            if tool == 'nmap':
-                v_out, _ = run_cmd_no_check(f"{tool} -V | head -n 1")
-                version = f" ({v_out})"
-            elif tool == 'wifite':
-                v_out, _ = run_cmd_no_check(f"{tool} --version 2>/dev/null | head -n 1")
-                version = f" ({v_out.strip()})"
-            print(f"- {tool}: Installed{version}")
+    # Wifite has two acceptable system-wide names
+    for tool in ['wifite', 'wifite2']:
+        path = _tool_path(tool)
+        if path:
+            v_out, v_code = run_cmd_no_check(f"{shlex.quote(path)} --version 2>/dev/null | head -n 1")
+            version = f" ({v_out.strip()})" if v_code == 0 and v_out.strip() else ""
+            print(f"- {tool}: Installed at {path}{version}")
         else:
             print(f"- {tool}: Missing")
+    for tool in ['airgeddon', 'tmux', 'aircrack-ng', 'hostapd', 'dnsmasq', 'iw', 'nmcli', 'nmap']:
+        path = _tool_path(tool)
+        if path:
+            version = ""
+            if tool == 'nmap':
+                v_out, _ = run_cmd_no_check(f"{shlex.quote(path)} -V | head -n 1")
+                version = f" ({v_out.strip()})"
+            elif tool == 'tmux':
+                v_out, _ = run_cmd_no_check(f"{shlex.quote(path)} -V")
+                version = f" ({v_out.strip()})"
+            print(f"- {tool}: Installed at {path}{version}")
+        else:
+            print(f"- {tool}: Missing")
+
+    # Headless / Airgeddon readiness
+    headless = _is_headless_env()
+    tmux_ok = _tool_path("tmux") is not None
+    if headless:
+        if tmux_ok:
+            print("- Headless environment: Yes (no DISPLAY/WAYLAND_DISPLAY); tmux available — Airgeddon can run in headless tmux mode.")
+        else:
+            print("- Headless environment: Yes (no DISPLAY/WAYLAND_DISPLAY); tmux MISSING — Airgeddon will not run interactively.")
+    else:
+        print("- Headless environment: No (DISPLAY or WAYLAND_DISPLAY is set).")
 
     print("\nDriver Modules:")
     for module in ['88XXau', 'rtw_8812au', 'rtw88_8812au', 'mt76x2u', 'mt76_usb', 'mt76', 'rtw_8822bu', 'rtw88_8822bu', '8188eu', 'rtl8xxxu', 'brcmfmac']:
@@ -623,20 +654,27 @@ def cmd_network_scan(args_target=None, args_type=None, args_last=False, args_lis
                 print("    No open ports recorded.")
         return
 
+    # Preflight: refuse to proceed if nmap is not installed
+    if not _tool_path("nmap"):
+        print("[-] Nmap is not installed. Run sudo ./setup.sh --update")
+        return
+
     # Interactive mode logic if parameters are missing
     if not args_target:
-        args_target = input("Enter target (e.g., 192.168.1.0/24): ")
+        args_target = input("Enter target (e.g., 192.168.1.0/24) or Enter to cancel: ").strip()
         if not args_target:
+            print("Cancelled: no Nmap target provided.")
             return
-            
+
     if not args_type:
         print("\nScan Types:")
         print("1. discovery")
         print("2. quick")
         print("3. services")
         print("4. full")
-        t_choice = input("Select type (1-4 or name): ").strip()
+        t_choice = input("Select type (1-4 or name) or Enter to cancel: ").strip()
         if not t_choice:
+            print("Cancelled: no Nmap scan type provided.")
             return
             
         type_map = {
@@ -789,17 +827,104 @@ def cmd_airgeddon():
         print("Error: Airgeddon requires root. Run with sudo.")
         return
 
+    headless = _is_headless_env()
+    tmux_available = _tool_path("tmux") is not None
+
+    if headless and not tmux_available:
+        print("[-] Headless environment detected (no DISPLAY/WAYLAND_DISPLAY) and tmux is not installed.")
+        print("    Airgeddon needs tmux to run on a headless Raspberry Pi.")
+        print("    Install tmux and rerun: sudo apt-get install -y tmux")
+        print("    Or run: sudo ./setup.sh --update")
+        return
+
     env = os.environ.copy()
     env["AIRGEDDON_AUTO_UPDATE"] = "false"
     env["IFACE"] = selected
     print(f"[+] Ghostlink validated {selected} as your external adapter.")
     print(f"    Airgeddon may prompt you to select an interface - choose: {selected}")
     print(f"    Do NOT select the management interface inside Airgeddon.")
+    if headless:
+        print("[+] Headless environment detected; tmux is installed.")
+        print("    If Airgeddon reports 'no graphics system detected', open its Options menu")
+        print("    and enable headless/tmux mode, then return to the main menu.")
     print(f"[+] Launching Airgeddon...")
     try:
         subprocess.run(["bash", airgeddon_bin], env=env, check=False)
     except FileNotFoundError:
         print("[-] bash not found. Cannot launch Airgeddon.")
+
+
+def cmd_wifite_launcher():
+    """Interactive Wifite launcher: pick adapter, then optional SSID/BSSID, then run Wifite system-wide."""
+    wifite_bin = _wifite_command()
+    if not wifite_bin:
+        print("[-] Wifite is not installed system-wide. Run sudo ./setup.sh --update")
+        return
+
+    adapters = detect_adapters()
+    candidates = _external_role_ifaces(
+        adapters, ["rtl8812au", "mt7612u", "rtl8188eus", "rtl88x2bu"]
+    )
+    if not candidates:
+        print("No non-management wireless adapters detected for Wifite.")
+        return
+
+    role_labels = {
+        "rtl8812au": "Pentest/uplink #1 (RTL8812AU)",
+        "mt7612u": "Pentest/uplink #2 (MT7612U)",
+        "rtl8188eus": "Backup pentest (RTL8188EUS)",
+        "rtl88x2bu": "AP adapter (RTL88x2BU) - last resort for pentest",
+    }
+
+    print("\n--- Start Wifite ---")
+    for i, (role, iface) in enumerate(candidates, 1):
+        driver = get_driver(iface)
+        mon = "monitor-capable" if check_monitor_mode(iface) else "no monitor support"
+        label = role_labels.get(role, role)
+        print(f"  {i}. {iface}  driver={driver}  role={label}  ({mon})")
+
+    choice = input(f"\nSelect adapter (1-{len(candidates)}) or Enter to cancel: ").strip()
+    if not choice.isdigit():
+        print("Cancelled: no adapter selected.")
+        return
+    idx = int(choice) - 1
+    if not (0 <= idx < len(candidates)):
+        print("Invalid selection.")
+        return
+    selected_role, selected_iface = candidates[idx]
+
+    if _is_management_iface(adapters, selected_iface):
+        print(f"Error: {selected_iface} is the management interface. Refusing to launch Wifite.")
+        return
+    if not check_monitor_mode(selected_iface):
+        print(f"Warning: {selected_iface} does not advertise monitor mode support.")
+        print("         Wifite may fail to put it into monitor mode.")
+
+    ssid = input("Optional target SSID (Enter to let Wifite pick interactively): ").strip()
+    bssid = ""
+    if ssid:
+        bssid = input("Optional target BSSID (Enter to skip): ").strip()
+        confirm = input(
+            "This tool is for authorized/lab use only. Confirm target is authorized? (y/n): "
+        ).strip().lower()
+        if confirm != "y":
+            print("Aborted.")
+            return
+        # Targeted run uses Ghostlink's existing pentest pipeline (DB logging, post-flow)
+        cmd_pentest(ssid, iface=selected_iface, bssid=bssid or None)
+        return
+
+    if os.geteuid() != 0:
+        print("Error: Wifite requires root. Run with sudo.")
+        return
+
+    print(f"[+] Launching Wifite interactively on {selected_iface}...")
+    print(f"    Wifite will let you select targets from a scan.")
+    print(f"    Do NOT select the management network inside Wifite.")
+    try:
+        subprocess.run([wifite_bin, "-i", selected_iface], check=False)
+    except FileNotFoundError:
+        print(f"[-] Wifite binary not found at {wifite_bin}.")
 
 
 def interactive_menu():
@@ -828,9 +953,7 @@ def interactive_menu():
             if choice == '1':
                 cmd_status()
             elif choice == '2':
-                ssid = input("Target SSID: ")
-                if ssid:
-                    cmd_pentest(ssid)
+                cmd_wifite_launcher()
             elif choice == '3':
                 cmd_airgeddon()
             elif choice == '4':
