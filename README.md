@@ -1,15 +1,41 @@
 # Ghostlink-Mini
 
-Ghostlink-Mini is a Raspberry Pi 5 CLI tool for authorized/lab Wi-Fi workflows using multiple Wi-Fi adapters with fixed roles.
+Ghostlink-Mini is a Raspberry Pi / Debian SBC CLI tool for authorized/lab Wi-Fi workflows using multiple Wi-Fi adapters with fixed roles.
+
+## Platform Support
+
+Chapter 1 targets:
+
+| Platform | Profile | Status |
+|---|---|---|
+| Raspberry Pi Zero W | `rpi_zero_w` | tested/owned |
+| Raspberry Pi Zero 2 W | `rpi_zero_2_w` | tested/owned |
+| Raspberry Pi 3B | `rpi_3b` | tested/owned |
+| Raspberry Pi 5 | `rpi_5` | tested/owned |
+| Raspberry Pi 1 | `rpi_1` | supported/untested |
+| Raspberry Pi 2 | `rpi_2` | supported/untested |
+| Raspberry Pi 3B+ | `rpi_3b_plus` | supported/untested |
+| Raspberry Pi 4 | `rpi_4` | supported/untested |
+| Generic Debian-based Linux SBC | `debian_sbc` | best-effort |
+
+Target OS images:
+
+- Raspberry Pi OS Lite 32-bit Bookworm
+- Raspberry Pi OS Lite 64-bit Bookworm
+- Raspberry Pi OS Lite 32-bit Trixie
+- Raspberry Pi OS Lite 64-bit Trixie
+- Generic Debian-based Linux SBCs on a best-effort basis
+
+See [docs/raspberry_pi_compatibility.md](docs/raspberry_pi_compatibility.md) for the profile matrix, setup behavior, ZRAM/GPU/overclock notes, and known limitations.
 
 ## Adapter Roles
 
 | # | Adapter | Role | Key |
 |---|---|---|---|
-| 1 | Raspberry Pi 5 Onboard Wi-Fi (brcmfmac) | Management only — never used for scan, pentest, monitor, AP, or attack workflows | `management` |
-| 2 | **RTL8812AU** (USB ID `0bda:8812`) | Main pentest/access/uplink adapter | `rtl8812au` |
-| 3 | **MT7612U** (USB ID `0e8d:7612` and others) | Second main pentest/access/uplink adapter | `mt7612u` |
-| 4 | RTL88x2BU (USB ID `0bda:b812`) | AP adapter — creates Ghostlink-AP | `rtl88x2bu` |
+| 1 | Onboard Wi-Fi, usually `brcmfmac` on Raspberry Pi | Management only; never used for scan, pentest, monitor, AP, or attack workflows | `management` |
+| 2 | RTL8812AU (USB ID `0bda:8812`) | Main pentest/access/uplink adapter | `rtl8812au` |
+| 3 | MT7612U (USB ID `0e8d:7612` and others) | Second main pentest/access/uplink adapter | `mt7612u` |
+| 4 | RTL88x2BU (USB ID `0bda:b812`) | AP adapter; creates Ghostlink-AP | `rtl88x2bu` |
 | 5 | RTL8188EUS (USB ID `2357:010c`) | Backup adapter | `rtl8188eus` |
 
 ## Supported USB Adapters
@@ -23,20 +49,34 @@ Ghostlink-Mini is a Raspberry Pi 5 CLI tool for authorized/lab Wi-Fi workflows u
 
 ## Setup and Installation
 
-**WARNING: Requires root access and an active internet connection.**
+WARNING: Requires root access and an active internet connection.
 
 ```bash
 sudo ./setup.sh
 ```
 
-Setup installs:
-- RTL8812AU pentest driver (aircrack-ng/rtl8812au v5.6.4.2, fallback: morrownr/8812au-20210820)
-- RTL88x2BU driver via lwfinger/rtw88
+Setup installs and prepares all supported driver paths even when the adapters are not plugged in:
+
+- RTL8812AU pentest driver: aircrack-ng/rtl8812au v5.6.4.2, fallback morrownr/8812au-20210820
+- RTL88x2BU driver via lwfinger/rtw88 for the AP role
 - RTL8188EUS backup driver
-- MT7612U in-kernel mt76 module check and firmware (`firmware-misc-nonfree`)
+- MT7612U in-kernel mt76 module check and `firmware-misc-nonfree`
 - Wifite2, Airgeddon, aircrack-ng, nmap, and other toolchain dependencies
 
-> **Note:** Setup prepares all supported driver paths even when adapters are not plugged in. Adapter detection is only used at runtime for role mapping. You can run setup before connecting any USB adapters.
+Setup also detects the platform profile and applies only compatible system tuning:
+
+- Profile-aware ZRAM sizing
+- Raspberry Pi GPU memory floor where a Pi boot config exists
+- Safe default Raspberry Pi CPU profile where supported and no user overclock already exists
+- Raspberry Pi filesystem expansion through `raspi-config nonint do_expand_rootfs` when available
+- Pi 5 fan and PCIe tuning only on `rpi_5`
+- No Raspberry Pi boot config changes on generic Debian SBCs
+
+To skip Ghostlink's default Raspberry Pi CPU profile, run:
+
+```bash
+sudo GHOSTLINK_DISABLE_RPI_OC=1 ./setup.sh
+```
 
 ## Running the Tool
 
@@ -46,9 +86,35 @@ Interactive CLI menu:
 ghostlink
 ```
 
+Interactive menu options include:
+
+| # | Option |
+|---|---|
+| 1 | Status |
+| 2 | Scan Wi-Fi networks |
+| 3 | Start pentest |
+| 4 | Show saved credentials |
+| 5 | Connect to saved network |
+| 6 | Start Ghostlink-AP on RTL88x2BU |
+| 7 | Stop Ghostlink-AP |
+| 8 | Network Scan (nmap) |
+| 9 | Restart networking services |
+| 10 | Run diagnostics |
+| 11 | Update Ghostlink-Mini |
+| 12 | Adapter roles (view) |
+| 13 | Monitor mode toggle |
+| 14 | Launch Airgeddon |
+| 15 | Exit |
+
+> **Airgeddon note**: Ghostlink validates the selected external adapter and blocks the management interface before launching Airgeddon. Airgeddon may still display its own interface picker - select the validated adapter inside Airgeddon. Never select the management/onboard Wi-Fi inside Airgeddon.
+
+> **Monitor mode**: The management/onboard Wi-Fi interface is never offered for monitor mode. Only external adapters that advertise monitor mode support can be toggled.
+
+> **Adapter roles**: Role assignment is automatic based on USB ID. The management interface is permanently excluded from all active roles (scan, pentest, AP, monitor).
+
 ## Direct Commands
 
-```
+```text
 ghostlink -status                              Show system and adapter status
 ghostlink -db                                  Show database status
 ghostlink -creds                               View saved credentials
@@ -67,23 +133,17 @@ ghostlink network-scan [--target <IP/CIDR>] [--type <type>]
 
 ## Scan and Pentest Examples
 
-Auto-select best available adapter (RTL8812AU first, MT7612U second):
+Auto-select best available adapter: RTL8812AU first, MT7612U second.
 
 ```bash
-# Scan
 sudo ghostlink scan
-
-# Pentest
 sudo ghostlink pentest --ssid "TargetNetwork"
 ```
 
 Explicitly select MT7612U by interface:
 
 ```bash
-# First find the MT7612U interface name
 ghostlink -status
-
-# Then use it explicitly
 sudo ghostlink scan --iface wlan1
 sudo ghostlink pentest --ssid "TargetNetwork" --iface wlan1
 ```
@@ -103,63 +163,56 @@ Both `scan` and `pentest` auto-select adapters in this order when `--iface` is n
 2. MT7612U (`mt76x2u` in-kernel driver)
 3. RTL8188EUS (backup)
 4. RTL88x2BU (last resort)
-5. Management interface — **never used**
+5. Management interface: never used
 
 ## Diagnostics
 
-Full adapter and driver status:
+Full platform, adapter, and driver status:
 
 ```bash
 ghostlink -diag
 ```
 
 Sample output includes:
-- Adapter map (role → interface → driver → monitor mode support)
+
+- Platform model, profile, tested/untested/best-effort status
+- OS, codename, architecture, and kernel
+- ZRAM status
+- Overclock and GPU memory status
+- Adapter map: role -> interface -> driver -> monitor mode support
 - RTL8812AU USB presence check and DKMS state if interface is missing
 - MT7612U USB presence check and mt76 module state if interface is missing
-- Loaded mt76 modules
-- `mt76x2u` kernel availability via `modinfo`
-- All toolchain dependencies
+- Driver compatibility warnings for headers, DKMS, and candidate modules
+- Toolchain dependency status
 
-### MT7612U Troubleshooting Commands
+## MT7612U Troubleshooting Commands
 
 ```bash
-# Check USB detection
 lsusb | grep -i "0e8d\|7612"
-
-# Check loaded mt76 modules
 lsmod | grep mt76
-
-# Check kernel module availability
 modinfo mt76x2u
-
-# Manually load the module
 sudo modprobe mt76x2u
-
-# Check dmesg for driver errors
 dmesg | grep -i mt76 | tail -20
-
-# Check wireless interfaces
 iw dev
-
-# Ghostlink diagnostics
 ghostlink -diag
 ghostlink -status
 ```
 
-## Raspberry Pi 5 Validation Checklist
+## Validation Checklist
 
-Run these checks on the Raspberry Pi 5 after setup:
+Run these checks on target hardware after setup. Local Windows syntax checks do not count as hardware validation.
 
-- [ ] `ghostlink -status` shows management interface (onboard brcmfmac)
-- [ ] `ghostlink -status` shows RTL8812AU Status: `wlanX (88XXau, ready)`
-- [ ] `ghostlink -status` shows MT7612U Status: `wlanX (mt76x2u, ready)` (if adapter is plugged in)
-- [ ] `ghostlink -status` shows RTL88x2BU Status: `wlanX (rtw_8822bu)`
-- [ ] `ghostlink -diag` shows `88XXau: Available`
-- [ ] `ghostlink -diag` shows `mt76x2u: Available`
-- [ ] `sudo ghostlink scan` uses RTL8812AU or MT7612U (not management interface)
-- [ ] `sudo ghostlink pentest --ssid "Test"` selects RTL8812AU or MT7612U
-- [ ] Management interface (brcmfmac) is never used for scan or pentest
+- [ ] `ghostlink -status` shows the correct platform profile and support status
+- [ ] `ghostlink -status` shows a management interface, usually onboard `brcmfmac` on Raspberry Pi
+- [ ] `ghostlink -status` shows RTL8812AU Status: `wlanX (88XXau, ready)` when plugged in
+- [ ] `ghostlink -status` shows MT7612U Status: `wlanX (mt76x2u, ready)` when plugged in
+- [ ] `ghostlink -status` shows RTL88x2BU Status: `wlanX (rtw_8822bu)` when plugged in
+- [ ] `ghostlink -diag` shows platform, OS/codename/arch/kernel, ZRAM, overclock, GPU memory, and driver warnings
+- [ ] `ghostlink -diag` shows `88XXau: Available` after RTL8812AU setup succeeds
+- [ ] `ghostlink -diag` shows `mt76x2u: Available` on kernels with MT7612U support
+- [ ] `sudo ghostlink scan` uses RTL8812AU or MT7612U, not the management interface
+- [ ] `sudo ghostlink pentest --ssid "Test"` asks for authorized/lab-use confirmation
+- [ ] Management interface is never used for scan or pentest
 - [ ] `ghostlink -ap-start` starts AP on RTL88x2BU, uplink via RTL8812AU or MT7612U
 - [ ] Internet is accessible through the uplink adapter during AP operation
 
@@ -171,13 +224,14 @@ ghostlink -update
 
 ## Adapter Strategy Documents
 
-- [docs/rtl8812au_strategy.md](docs/rtl8812au_strategy.md) — RTL8812AU DKMS driver install strategy for Raspberry Pi 5
-- [docs/mt7612u_strategy.md](docs/mt7612u_strategy.md) — MT7612U in-kernel mt76 driver strategy
+- [docs/raspberry_pi_compatibility.md](docs/raspberry_pi_compatibility.md): Raspberry Pi and Debian SBC compatibility matrix
+- [docs/rtl8812au_strategy.md](docs/rtl8812au_strategy.md): RTL8812AU DKMS driver install strategy
+- [docs/mt7612u_strategy.md](docs/mt7612u_strategy.md): MT7612U in-kernel mt76 driver strategy
 
 ## Basic Troubleshooting
 
-- **Adapters not showing up**: Run `ghostlink -diag` to verify drivers are loaded. Ensure the Pi has adequate power (Pi 5 requires 27W for full USB peripheral support).
-- **MT7612U not detected**: Run `sudo modprobe mt76x2u`, replug the adapter, then `ghostlink -diag`. See [docs/mt7612u_strategy.md](docs/mt7612u_strategy.md).
-- **RTL8812AU not detected**: Run `sudo modprobe 88XXau`, replug, then `ghostlink -diag`. See [docs/rtl8812au_strategy.md](docs/rtl8812au_strategy.md).
-- **AP failing to start**: Check if `hostapd` or `dnsmasq` is crashing. Run `ghostlink -diag` and check `/var/log/syslog`.
-- **Cannot connect to management network**: The tool uses NetworkManager. Check with `nmcli connection show`.
+- Adapters not showing up: Run `ghostlink -diag` to verify drivers are loaded. Ensure the SBC has adequate power for multiple USB Wi-Fi adapters.
+- MT7612U not detected: Run `sudo modprobe mt76x2u`, replug the adapter, then `ghostlink -diag`. See [docs/mt7612u_strategy.md](docs/mt7612u_strategy.md).
+- RTL8812AU not detected: Run `sudo modprobe 88XXau`, replug, then `ghostlink -diag`. See [docs/rtl8812au_strategy.md](docs/rtl8812au_strategy.md).
+- AP failing to start: Check if `hostapd` or `dnsmasq` is crashing. Run `ghostlink -diag` and check `/var/log/syslog`.
+- Cannot connect to management network: The tool uses NetworkManager. Check with `nmcli connection show`.

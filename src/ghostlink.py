@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 import argparse
 import os
-import time
 import shlex
+import subprocess
 import sys
+import time
 from core.database import (
     get_db_stats, get_credentials, save_scan_result, save_pentest_job,
     save_credential, update_connection_status,
@@ -17,6 +18,10 @@ from core.network import (
     mt7612u_usb_present,
 )
 from core.pentest import start_pentest, check_monitor_mode
+from core.platform import (
+    detect_platform, get_driver_compatibility_warnings, get_fan_config_status,
+    get_gpu_memory_status, get_overclock_status, get_zram_status,
+)
 from core.updater import update_ghostlink
 from core.scanner import run_nmap_scan
 
@@ -30,7 +35,32 @@ def print_banner():
  ╚═════╝ ╚═╝  ╚═╝ ╚═════╝ ╚══════╝   ╚═╝   ╚══════╝╚═╝╚═╝  ╚═══╝╚═╝  ╚═╝
 """)
 
+def print_platform_overview(show_driver_warnings=False):
+    platform_info = detect_platform()
+    print(f"\n[+] Platform:              {platform_info['model']}")
+    print(f"[+] Profile:               {platform_info['profile']} ({platform_info['support']})")
+    print(
+        f"[+] OS/Arch/Kernel:        {platform_info['pretty_name']} "
+        f"({platform_info['codename']}) | {platform_info['architecture']} | {platform_info['kernel']}"
+    )
+    print(f"[+] ZRAM:                  {get_zram_status()}")
+    print(f"[+] Overclock:             {get_overclock_status(platform_info)}")
+    print(f"[+] GPU Memory:            {get_gpu_memory_status(platform_info)}")
+
+    warnings = get_driver_compatibility_warnings(platform_info)
+    if warnings:
+        if show_driver_warnings:
+            print("[!] Driver Compatibility:")
+            for warning in warnings:
+                print(f"    - {warning}")
+        else:
+            print(f"[!] Driver Compatibility: {len(warnings)} warning(s); run 'ghostlink -diag' for details.")
+    else:
+        print("[+] Driver Compatibility: No warnings detected.")
+    return platform_info
+
 def print_status_overview():
+    print_platform_overview()
     adapters = detect_adapters()
     mgmt_iface = adapters.get("management")
     rtl8812au_iface = adapters.get("rtl8812au")
@@ -78,6 +108,24 @@ def print_status_overview():
     print(f"[-] Ghostlink-AP Status:   {ap_status}")
     print(f"[-] Internet Uplink:       {internet_status}\n")
     return adapters
+
+def _external_role_ifaces(adapters, roles):
+    seen = set()
+    selected = []
+    for role in roles:
+        iface = adapters.get(role)
+        if not iface or _is_management_iface(adapters, iface) or iface in seen:
+            continue
+        seen.add(iface)
+        selected.append((role, iface))
+    return selected
+
+def _is_management_iface(adapters, iface):
+    if not iface:
+        return False
+    if iface == adapters.get("management"):
+        return True
+    return get_driver(iface) in ["brcmfmac", "brcmsmac"]
 
 def cmd_status():
     print_banner()
@@ -127,12 +175,8 @@ def cmd_creds():
 
 def cmd_scan(iface=None):
     adapters = detect_adapters()
-    candidates = [iface] if iface else [
-        adapters.get("rtl8812au"),
-        adapters.get("mt7612u"),
-        adapters.get("rtl8188eus"),
-        adapters.get("rtl88x2bu"),
-    ]
+    scan_roles = ["rtl8812au", "mt7612u", "rtl8188eus", "rtl88x2bu"]
+    candidates = [iface] if iface else [iface for _, iface in _external_role_ifaces(adapters, scan_roles)]
     candidates = [i for i in candidates if i]
 
     if not candidates:
@@ -158,7 +202,7 @@ def cmd_scan(iface=None):
         if not is_wireless_interface(candidate):
             print(f"Warning: Interface {candidate} is not a wireless interface.")
             continue
-        if candidate == adapters.get("management"):
+        if _is_management_iface(adapters, candidate):
             print(f"Warning: Interface {candidate} is configured for management. Skipping scan on it.")
             continue
         if os.geteuid() != 0 and get_operstate(candidate) == "down":
@@ -210,10 +254,8 @@ def _find_target_network(iface, ssid, bssid=None):
 def cmd_pentest(ssid, iface=None, bssid=None):
     adapters = detect_adapters()
     if not iface:
-        iface = (adapters.get("rtl8812au") or
-                 adapters.get("mt7612u") or
-                 adapters.get("rtl8188eus") or
-                 adapters.get("rtl88x2bu"))
+        candidates = _external_role_ifaces(adapters, ["rtl8812au", "mt7612u", "rtl8188eus", "rtl88x2bu"])
+        iface = candidates[0][1] if candidates else None
 
     if not iface:
         print("Error: No suitable adapter found for pentest.")
@@ -231,7 +273,7 @@ def cmd_pentest(ssid, iface=None, bssid=None):
         print(f"Error: Interface {iface} is not a wireless interface.")
         return
 
-    if iface == adapters.get("management"):
+    if _is_management_iface(adapters, iface):
         print(f"Error: Interface {iface} is configured for management. Pentesting is blocked on this interface.")
         return
     if os.geteuid() != 0:
@@ -297,7 +339,8 @@ def cmd_pentest(ssid, iface=None, bssid=None):
 def do_connect(ssid, password, iface=None):
     adapters = detect_adapters()
     if not iface:
-        iface = adapters.get("rtl8812au") or adapters.get("mt7612u")
+        candidates = _external_role_ifaces(adapters, ["rtl8812au", "mt7612u"])
+        iface = candidates[0][1] if candidates else None
     if not iface:
         print("Error: No uplink adapter (RTL8812AU or MT7612U) detected.")
         return
@@ -335,8 +378,10 @@ def cmd_connect():
 
 def cmd_ap_start():
     adapters = detect_adapters()
-    ap_iface = adapters.get("rtl88x2bu")
-    uplink_iface = adapters.get("rtl8812au") or adapters.get("mt7612u")
+    ap_candidates = _external_role_ifaces(adapters, ["rtl88x2bu"])
+    uplink_candidates = _external_role_ifaces(adapters, ["rtl8812au", "mt7612u"])
+    ap_iface = ap_candidates[0][1] if ap_candidates else None
+    uplink_iface = uplink_candidates[0][1] if uplink_candidates else None
 
     if not ap_iface:
         print("Error: RTL88x2BU adapter not detected for AP.")
@@ -344,7 +389,16 @@ def cmd_ap_start():
     if not uplink_iface:
         print("Error: No uplink adapter (RTL8812AU or MT7612U) detected.")
         return
-        
+    if _is_management_iface(adapters, ap_iface):
+        print(f"Error: AP interface {ap_iface} is the management interface. Cannot use for AP.")
+        return
+    if _is_management_iface(adapters, uplink_iface):
+        print(f"Error: Uplink interface {uplink_iface} is the management interface. Cannot use for uplink.")
+        return
+    if ap_iface == uplink_iface:
+        print(f"Error: AP interface and uplink interface are the same ({ap_iface}). Cannot serve both roles.")
+        return
+
     print(f"Starting Ghostlink-AP on {ap_iface} shared via {uplink_iface}...")
     if not start_ap(ap_iface, uplink_iface):
         return
@@ -369,15 +423,31 @@ def cmd_ap_stop():
             return
     print("Ghostlink-AP stopped.")
 
+def _iface_current_mode(iface):
+    out, _ = run_cmd_no_check(f"iw dev {shlex.quote(iface)} info")
+    for line in out.splitlines():
+        stripped = line.strip()
+        if stripped.startswith("type "):
+            return stripped.split()[1]
+    return "unknown"
+
+
 def cmd_diag():
     print("\n--- Diagnostics ---")
-    out, _ = run_cmd_no_check("cat /etc/os-release | grep PRETTY_NAME | cut -d= -f2")
-    print(f"OS Version: {out.strip('\"')}")
-    out, _ = run_cmd_no_check("uname -r")
-    print(f"Kernel Version: {out}")
-    print(f"Active Default Route: {get_default_route_iface()}")
-    
+    platform_info = print_platform_overview(show_driver_warnings=True)
+    print(f"[+] Platform Notes:        {platform_info['notes']}")
+    print(f"[+] Pi 5 Fan Config:       {get_fan_config_status(platform_info)}")
+
+    df_out, _ = run_cmd_no_check("df -h /")
+    root_line = df_out.splitlines()[1] if df_out and len(df_out.splitlines()) >= 2 else "unavailable"
+    print(f"[+] Root Filesystem:       {root_line}")
+    print(f"[+] Active Default Route:  {get_default_route_iface()}")
+
     adapters = detect_adapters()
+    mgmt = adapters.get("management")
+    mgmt_label = mgmt if mgmt else "not detected"
+    print(f"\n[+] Management Protection: {mgmt_label} is excluded from scan/pentest/AP/monitor/attack")
+
     print("\nAdapter Map:")
     for role, iface in adapters.items():
         print(f"- {role}: {iface if iface else 'Missing'}")
@@ -385,7 +455,8 @@ def cmd_diag():
             print(f"  Driver: {get_driver(iface)}")
             support = "Yes" if check_monitor_mode(iface) else "No"
             print(f"  Monitor mode support: {support}")
-            
+            print(f"  Current mode: {_iface_current_mode(iface)}")
+
     if not adapters.get("rtl8812au"):
         out, code = run_cmd_no_check("lsusb -d 0bda:8812")
         if code == 0 and out.strip():
@@ -561,27 +632,175 @@ def cmd_network_scan(args_target=None, args_type=None, args_last=False, args_lis
     if job_id:
         print(f"Scan complete. Run 'ghostlink network-scan --show {job_id}' to view details.")
 
+def cmd_adapter_roles():
+    adapters = detect_adapters()
+    role_labels = {
+        "management": "Management (onboard — never used for scan/pentest/AP/monitor)",
+        "rtl8812au":  "Pentest/uplink #1 (RTL8812AU)",
+        "mt7612u":    "Pentest/uplink #2 (MT7612U)",
+        "rtl88x2bu":  "AP adapter (RTL88x2BU)",
+        "rtl8188eus": "Backup pentest (RTL8188EUS)",
+    }
+    print("\n--- Adapter Role Map (read-only view) ---")
+    print("  Roles are assigned automatically by USB ID at runtime.")
+    print("  Management interface is permanently excluded from all active roles.")
+    for role, iface in adapters.items():
+        label = role_labels.get(role, role)
+        if iface:
+            driver = get_driver(iface)
+            mon = "monitor-capable" if check_monitor_mode(iface) else "managed only"
+            mode = _iface_current_mode(iface)
+            print(f"[+] {label}")
+            print(f"    Interface: {iface}  Driver: {driver}  Mode: {mode}  ({mon})")
+        else:
+            print(f"[-] {label}")
+            print(f"    Interface: not detected")
+
+
+def cmd_monitor_mode():
+    adapters = detect_adapters()
+    candidates = _external_role_ifaces(adapters, ["rtl8812au", "mt7612u", "rtl8188eus", "rtl88x2bu"])
+    if not candidates:
+        print("No non-management wireless adapters detected.")
+        return
+
+    iface_list = [iface for _, iface in candidates]
+    print("\n--- Monitor Mode Toggle ---")
+    for i, iface in enumerate(iface_list, 1):
+        driver = get_driver(iface)
+        mon_cap = check_monitor_mode(iface)
+        out, _ = run_cmd_no_check(f"iw dev {shlex.quote(iface)} info")
+        current_type = "unknown"
+        for line in out.splitlines():
+            line = line.strip()
+            if line.startswith("type "):
+                current_type = line.split()[1]
+                break
+        cap_str = "monitor-capable" if mon_cap else "no monitor support"
+        print(f"  {i}. {iface} ({driver}, {cap_str}, current: {current_type})")
+
+    choice = input("\nSelect adapter (1-{}) or Enter to cancel: ".format(len(iface_list))).strip()
+    if not choice.isdigit():
+        print("Cancelled.")
+        return
+    idx = int(choice) - 1
+    if not (0 <= idx < len(iface_list)):
+        print("Invalid selection.")
+        return
+
+    selected = iface_list[idx]
+    if not check_monitor_mode(selected):
+        print(f"[!] {selected} does not advertise monitor mode support. Cannot toggle.")
+        return
+
+    action = input("  Enable (e) or disable (d) monitor mode? ").strip().lower()
+    if action == 'e':
+        if os.geteuid() != 0:
+            print("Error: root required to change interface mode. Run with sudo.")
+            return
+        run_cmd_no_check(f"ip link set {shlex.quote(selected)} down")
+        out2, code2 = run_cmd_no_check(f"iw dev {shlex.quote(selected)} set type monitor")
+        run_cmd_no_check(f"ip link set {shlex.quote(selected)} up")
+        if code2 == 0:
+            print(f"[+] {selected} is now in monitor mode.")
+        else:
+            print(f"[-] Failed to set monitor mode on {selected}: {out2}")
+    elif action == 'd':
+        if os.geteuid() != 0:
+            print("Error: root required to change interface mode. Run with sudo.")
+            return
+        run_cmd_no_check(f"ip link set {shlex.quote(selected)} down")
+        out2, code2 = run_cmd_no_check(f"iw dev {shlex.quote(selected)} set type managed")
+        run_cmd_no_check(f"ip link set {shlex.quote(selected)} up")
+        if code2 == 0:
+            print(f"[+] {selected} is back in managed mode.")
+        else:
+            print(f"[-] Failed to set managed mode on {selected}: {out2}")
+    else:
+        print("Cancelled.")
+
+
+def cmd_airgeddon():
+    adapters = detect_adapters()
+    candidates = _external_role_ifaces(adapters, ["rtl8812au", "mt7612u", "rtl8188eus", "rtl88x2bu"])
+    if not candidates:
+        print("No non-management wireless adapters detected for Airgeddon.")
+        return
+
+    iface_list = [iface for _, iface in candidates]
+    print("\n--- Launch Airgeddon ---")
+    for i, iface in enumerate(iface_list, 1):
+        driver = get_driver(iface)
+        print(f"  {i}. {iface} ({driver})")
+
+    choice = input("\nSelect adapter for Airgeddon (1-{}) or Enter to cancel: ".format(len(iface_list))).strip()
+    if not choice.isdigit():
+        print("Cancelled.")
+        return
+    idx = int(choice) - 1
+    if not (0 <= idx < len(iface_list)):
+        print("Invalid selection.")
+        return
+
+    selected = iface_list[idx]
+    print("\n[!] Airgeddon is for authorized/lab use only. Only target networks you own or have explicit written permission to test.")
+    confirm = input("Confirm target is authorized? (y/n): ").strip().lower()
+    if confirm != 'y':
+        print("Aborted.")
+        return
+
+    airgeddon_paths = ["/usr/local/bin/airgeddon", "/opt/airgeddon/airgeddon.sh"]
+    airgeddon_bin = None
+    for path in airgeddon_paths:
+        if os.path.isfile(path):
+            airgeddon_bin = path
+            break
+
+    if not airgeddon_bin:
+        print("[-] Airgeddon is not installed. Run 'sudo ./setup.sh --update' to install it.")
+        return
+
+    if os.geteuid() != 0:
+        print("Error: Airgeddon requires root. Run with sudo.")
+        return
+
+    env = os.environ.copy()
+    env["AIRGEDDON_AUTO_UPDATE"] = "false"
+    env["IFACE"] = selected
+    print(f"[+] Ghostlink validated {selected} as your external adapter.")
+    print(f"    Airgeddon may prompt you to select an interface - choose: {selected}")
+    print(f"    Do NOT select the management interface inside Airgeddon.")
+    print(f"[+] Launching Airgeddon...")
+    try:
+        subprocess.run(["bash", airgeddon_bin], env=env, check=False)
+    except FileNotFoundError:
+        print("[-] bash not found. Cannot launch Airgeddon.")
+
+
 def interactive_menu():
     while True:
         try:
             print_banner()
             print_status_overview()
             
-            print("1. Status")
-            print("2. Scan Wi-Fi networks")
-            print("3. Start pentest")
-            print("4. Show saved credentials")
-            print("5. Connect to saved network")
-            print("6. Start Ghostlink-AP on RTL88x2BU")
-            print("7. Stop Ghostlink-AP")
-            print("8. Network Scan")
-            print("9. Restart networking services")
+            print("1.  Status")
+            print("2.  Scan Wi-Fi networks")
+            print("3.  Start pentest")
+            print("4.  Show saved credentials")
+            print("5.  Connect to saved network")
+            print("6.  Start Ghostlink-AP on RTL88x2BU")
+            print("7.  Stop Ghostlink-AP")
+            print("8.  Network Scan")
+            print("9.  Restart networking services")
             print("10. Run diagnostics")
             print("11. Update Ghostlink-Mini")
-            print("12. Exit")
-            
+            print("12. Adapter roles")
+            print("13. Monitor mode toggle")
+            print("14. Launch Airgeddon")
+            print("15. Exit")
+
             choice = input("\nSelect option: ")
-            
+
             if choice == '1':
                 cmd_status()
             elif choice == '2':
@@ -607,6 +826,12 @@ def interactive_menu():
             elif choice == '11':
                 cmd_update()
             elif choice == '12':
+                cmd_adapter_roles()
+            elif choice == '13':
+                cmd_monitor_mode()
+            elif choice == '14':
+                cmd_airgeddon()
+            elif choice == '15':
                 break
             else:
                 print("Invalid option.")

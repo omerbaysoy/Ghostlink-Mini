@@ -13,13 +13,27 @@ export DEBIAN_FRONTEND=noninteractive
 export APT_LISTCHANGES_FRONTEND=none
 
 UPDATE_MODE=0
+DRY_RUN=0
+PLATFORM_MODEL="Generic Debian-based SBC"
+PLATFORM_PROFILE="debian_sbc"
+PLATFORM_LABEL="Generic Debian-based SBC"
+PLATFORM_SUPPORT="best-effort"
+PLATFORM_OS_PRETTY="unknown"
+PLATFORM_OS_CODENAME="unknown"
+PLATFORM_ARCH="unknown"
+PLATFORM_KERNEL="unknown"
+PLATFORM_ZRAM_MB=1024
+PLATFORM_GPU_MEM_MB=""
+PLATFORM_OC_SUMMARY="not applicable"
+PLATFORM_NOTES="Pi-specific boot, fan, PCIe, and raspi-config steps are skipped."
 
 usage() {
     cat <<USAGE
-Usage: sudo ./setup.sh [--update] [--help]
+Usage: sudo ./setup.sh [--update] [--dry-run] [--help]
 
 Options:
   --update        Reinstall/update files without prompting for management Wi-Fi
+  --dry-run       Detect platform and print install plan; make no changes
   -h, --help      Show this help
 USAGE
 }
@@ -28,6 +42,9 @@ while [ $# -gt 0 ]; do
     case "$1" in
         --update)
             UPDATE_MODE=1
+            ;;
+        --dry-run)
+            DRY_RUN=1
             ;;
         -h|--help)
             usage
@@ -42,19 +59,26 @@ while [ $# -gt 0 ]; do
     shift
 done
 
-if [ "$EUID" -ne 0 ]; then
+if [ "$DRY_RUN" -eq 0 ] && [ "$EUID" -ne 0 ]; then
     echo "Please run as root (sudo ./setup.sh). Use ./setup.sh --help for options."
+    echo "Tip: --dry-run does not require root."
     exit 1
 fi
 
-mkdir -p /var/log/ghostlink
-touch "$SETUP_LOG" || {
-    echo "[-] Cannot write setup log at $SETUP_LOG"
-    exit 1
-}
+if [ "$DRY_RUN" -eq 0 ]; then
+    mkdir -p /var/log/ghostlink
+    touch "$SETUP_LOG" || {
+        echo "[-] Cannot write setup log at $SETUP_LOG"
+        exit 1
+    }
+fi
 
 log() {
-    echo "$@" | tee -a "$SETUP_LOG"
+    if [ "$DRY_RUN" -eq 1 ]; then
+        echo "$@"
+    else
+        echo "$@" | tee -a "$SETUP_LOG"
+    fi
 }
 
 run_logged() {
@@ -84,6 +108,203 @@ run_shell_logged_timeout() {
         log "[-] Command timed out after ${seconds}s: $script"
     fi
     return "$code"
+}
+
+read_first_line() {
+    local path="$1"
+    if [ -r "$path" ]; then
+        tr -d '\000' <"$path" 2>/dev/null | head -n 1
+    fi
+}
+
+set_platform_profile_defaults() {
+    case "$PLATFORM_PROFILE" in
+        rpi_zero_w)
+            PLATFORM_LABEL="Raspberry Pi Zero W"
+            PLATFORM_SUPPORT="tested/owned"
+            PLATFORM_ZRAM_MB=512
+            PLATFORM_GPU_MEM_MB=16
+            PLATFORM_OC_SUMMARY="stock-safe baseline; no automatic CPU overclock"
+            PLATFORM_NOTES="armv6/low-memory profile; USB/power headroom is limited."
+            ;;
+        rpi_zero_2_w)
+            PLATFORM_LABEL="Raspberry Pi Zero 2 W"
+            PLATFORM_SUPPORT="tested/owned"
+            PLATFORM_ZRAM_MB=1024
+            PLATFORM_GPU_MEM_MB=16
+            PLATFORM_OC_SUMMARY="safe mild profile: arm_freq=1100"
+            PLATFORM_NOTES="low-memory quad-core profile; keep adapter power modest."
+            ;;
+        rpi_1)
+            PLATFORM_LABEL="Raspberry Pi 1"
+            PLATFORM_SUPPORT="supported/untested"
+            PLATFORM_ZRAM_MB=512
+            PLATFORM_GPU_MEM_MB=16
+            PLATFORM_OC_SUMMARY="not applied by default"
+            PLATFORM_NOTES="best with lightweight workflows; external powered USB is recommended."
+            ;;
+        rpi_2)
+            PLATFORM_LABEL="Raspberry Pi 2"
+            PLATFORM_SUPPORT="supported/untested"
+            PLATFORM_ZRAM_MB=1024
+            PLATFORM_GPU_MEM_MB=16
+            PLATFORM_OC_SUMMARY="not applied by default"
+            PLATFORM_NOTES="supported but not owned/tested for Chapter 1."
+            ;;
+        rpi_3b)
+            PLATFORM_LABEL="Raspberry Pi 3B"
+            PLATFORM_SUPPORT="tested/owned"
+            PLATFORM_ZRAM_MB=1024
+            PLATFORM_GPU_MEM_MB=16
+            PLATFORM_OC_SUMMARY="safe mild profile: arm_freq=1300, core_freq=500, over_voltage=2"
+            PLATFORM_NOTES="USB 2.0 and shared bus constraints apply."
+            ;;
+        rpi_3b_plus)
+            PLATFORM_LABEL="Raspberry Pi 3 Model B+"
+            PLATFORM_SUPPORT="supported/untested"
+            PLATFORM_ZRAM_MB=1024
+            PLATFORM_GPU_MEM_MB=16
+            PLATFORM_OC_SUMMARY="not applied by default (3B+ detected; set manually if desired)"
+            PLATFORM_NOTES="Pi 3B+ similar to 3B; auto-OC not applied to avoid 3B+ stability regression."
+            ;;
+        rpi_4)
+            PLATFORM_LABEL="Raspberry Pi 4"
+            PLATFORM_SUPPORT="supported/untested"
+            PLATFORM_ZRAM_MB=2048
+            PLATFORM_GPU_MEM_MB=32
+            PLATFORM_OC_SUMMARY="not applied by default"
+            PLATFORM_NOTES="supported but not owned/tested for Chapter 1."
+            ;;
+        rpi_5)
+            PLATFORM_LABEL="Raspberry Pi 5"
+            PLATFORM_SUPPORT="tested/owned"
+            PLATFORM_ZRAM_MB=2048
+            PLATFORM_GPU_MEM_MB=32
+            PLATFORM_OC_SUMMARY="safe mild profile: arm_freq=2600"
+            PLATFORM_NOTES="Pi 5-only fan and PCIe tuning may be applied by setup."
+            ;;
+        unknown_rpi)
+            PLATFORM_LABEL="Unknown Raspberry Pi"
+            PLATFORM_SUPPORT="supported/untested"
+            PLATFORM_ZRAM_MB=1024
+            PLATFORM_GPU_MEM_MB=16
+            PLATFORM_OC_SUMMARY="not applied by default"
+            PLATFORM_NOTES="Raspberry Pi detected, but model did not match a named profile."
+            ;;
+        *)
+            PLATFORM_PROFILE="debian_sbc"
+            PLATFORM_LABEL="Generic Debian-based SBC"
+            PLATFORM_SUPPORT="best-effort"
+            PLATFORM_ZRAM_MB=1024
+            PLATFORM_GPU_MEM_MB=""
+            PLATFORM_OC_SUMMARY="not applicable"
+            PLATFORM_NOTES="Pi-specific boot, fan, PCIe, and raspi-config steps are skipped."
+            ;;
+    esac
+}
+
+detect_platform() {
+    local model cpu_model hardware lower_model
+    local version_codename ubuntu_codename debian_codename
+
+    model="$(read_first_line /proc/device-tree/model)"
+    if [ -z "$model" ] && [ -r /proc/cpuinfo ]; then
+        cpu_model="$(awk -F: '/^Model/ {sub(/^[ \t]+/, "", $2); print $2; exit}' /proc/cpuinfo 2>/dev/null)"
+        hardware="$(awk -F: '/^Hardware/ {sub(/^[ \t]+/, "", $2); print $2; exit}' /proc/cpuinfo 2>/dev/null)"
+        if [ -n "$cpu_model" ]; then
+            model="$cpu_model"
+        elif printf '%s' "$hardware" | grep -qi '^bcm'; then
+            model="Raspberry Pi (model unknown)"
+        fi
+    fi
+    PLATFORM_MODEL="${model:-Generic Debian-based SBC}"
+
+    PLATFORM_ARCH="$(dpkg --print-architecture 2>/dev/null || uname -m 2>/dev/null || echo unknown)"
+    PLATFORM_KERNEL="$(uname -r 2>/dev/null || echo unknown)"
+
+    if [ -r /etc/os-release ]; then
+        # shellcheck disable=SC1091
+        . /etc/os-release
+        version_codename="${VERSION_CODENAME:-}"
+        ubuntu_codename="${UBUNTU_CODENAME:-}"
+        debian_codename="${DEBIAN_CODENAME:-}"
+        PLATFORM_OS_PRETTY="${PRETTY_NAME:-unknown}"
+        PLATFORM_OS_CODENAME="${version_codename:-${ubuntu_codename:-${debian_codename:-unknown}}}"
+    fi
+
+    lower_model="$(printf '%s' "$PLATFORM_MODEL" | tr '[:upper:]' '[:lower:]')"
+    case "$lower_model" in
+        *"raspberry pi zero 2"*)
+            PLATFORM_PROFILE="rpi_zero_2_w"
+            ;;
+        *"raspberry pi zero"*)
+            PLATFORM_PROFILE="rpi_zero_w"
+            ;;
+        *"raspberry pi 5"*)
+            PLATFORM_PROFILE="rpi_5"
+            ;;
+        *"raspberry pi 4"*)
+            PLATFORM_PROFILE="rpi_4"
+            ;;
+        *"raspberry pi 3 model b plus"*|*"raspberry pi 3b+"*)
+            PLATFORM_PROFILE="rpi_3b_plus"
+            ;;
+        *"raspberry pi 3 model b"*)
+            PLATFORM_PROFILE="rpi_3b"
+            ;;
+        *"raspberry pi 3"*)
+            PLATFORM_PROFILE="unknown_rpi"
+            ;;
+        *"raspberry pi 2"*)
+            PLATFORM_PROFILE="rpi_2"
+            ;;
+        *"raspberry pi model"*|*"raspberry pi 1"*)
+            PLATFORM_PROFILE="rpi_1"
+            ;;
+        *"raspberry pi"*)
+            PLATFORM_PROFILE="unknown_rpi"
+            ;;
+        *)
+            PLATFORM_PROFILE="debian_sbc"
+            ;;
+    esac
+
+    set_platform_profile_defaults
+}
+
+is_raspberry_pi() {
+    [ "$PLATFORM_PROFILE" != "debian_sbc" ]
+}
+
+log_platform_summary() {
+    log "--- Platform Detection ---"
+    log "[+] Model: $PLATFORM_MODEL"
+    log "[+] Profile: $PLATFORM_PROFILE ($PLATFORM_SUPPORT)"
+    log "[+] OS: $PLATFORM_OS_PRETTY"
+    log "[+] Codename: $PLATFORM_OS_CODENAME"
+    log "[+] Architecture: $PLATFORM_ARCH"
+    log "[+] Kernel: $PLATFORM_KERNEL"
+    log "[+] ZRAM target: ${PLATFORM_ZRAM_MB}MB"
+    if [ -n "$PLATFORM_GPU_MEM_MB" ]; then
+        log "[+] GPU memory floor: ${PLATFORM_GPU_MEM_MB}MB"
+    else
+        log "[+] GPU memory floor: skipped for generic Debian SBC"
+    fi
+    log "[+] Overclock policy: $PLATFORM_OC_SUMMARY"
+    log "[+] Notes: $PLATFORM_NOTES"
+}
+
+log_compatibility_matrix() {
+    log "--- Chapter 1 Compatibility Matrix ---"
+    log "[+] rpi_zero_w: tested/owned | ZRAM 512MB | GPU 16MB | OC stock-safe | fan/storage N/A | drivers: all prepared"
+    log "[+] rpi_zero_2_w: tested/owned | ZRAM 1024MB | GPU 16MB | OC arm_freq=1100 | fan/storage N/A | drivers: all prepared"
+    log "[+] rpi_3b: tested/owned | ZRAM 1024MB | GPU 16MB | OC arm_freq=1300/core_freq=500 | fan/storage N/A | drivers: all prepared"
+    log "[+] rpi_5: tested/owned | ZRAM 2048MB | GPU 32MB | OC arm_freq=2600 | fan/PCIe gated to Pi 5 | drivers: all prepared"
+    log "[+] rpi_1: supported/untested | ZRAM 512MB | GPU 16MB | OC skipped | fan/storage N/A | drivers: best effort"
+    log "[+] rpi_2: supported/untested | ZRAM 1024MB | GPU 16MB | OC skipped | fan/storage N/A | drivers: best effort"
+    log "[+] rpi_3b_plus: supported/untested | ZRAM 1024MB | GPU 16MB | OC skipped | fan/storage N/A | drivers: best effort"
+    log "[+] rpi_4: supported/untested | ZRAM 2048MB | GPU 32MB | OC skipped | fan/storage N/A | drivers: best effort"
+    log "[+] debian_sbc: best-effort | ZRAM 1024MB | Pi boot/GPU/OC/fan/PCIe skipped | drivers: all prepared when headers are available"
 }
 
 set_runtime_permissions() {
@@ -269,19 +490,56 @@ apt_package_available() {
     [ -n "$candidate" ] && [ "$candidate" != "(none)" ]
 }
 
+header_package_candidates() {
+    local release="$1"
+    local arch="$2"
+
+    printf '%s\n' "linux-headers-$release"
+
+    if is_raspberry_pi; then
+        printf '%s\n' "raspberrypi-kernel-headers"
+        case "$arch" in
+            arm64|aarch64)
+                printf '%s\n' "linux-headers-rpi-v8"
+                ;;
+            armhf|armv7l)
+                printf '%s\n' "linux-headers-rpi-v7"
+                printf '%s\n' "linux-headers-rpi-v6"
+                ;;
+            armel|armv6l)
+                printf '%s\n' "linux-headers-rpi-v6"
+                printf '%s\n' "linux-headers-rpi-v7"
+                ;;
+        esac
+    fi
+}
+
 install_kernel_headers() {
-    local release arch checked package
+    local release arch checked package seen candidate
+    local candidates=()
     release="$(uname -r)"
     arch="$(dpkg --print-architecture 2>/dev/null || echo unknown)"
-    checked="linux-headers-rpi-v8 linux-headers-$release"
 
     if kernel_headers_available; then
         log "[+] Kernel headers are available at /lib/modules/$release/build."
         return 0
     fi
 
+    seen=""
+    while IFS= read -r candidate; do
+        [ -z "$candidate" ] && continue
+        case " $seen " in
+            *" $candidate "*)
+                continue
+                ;;
+        esac
+        candidates+=("$candidate")
+        seen="$seen $candidate"
+    done < <(header_package_candidates "$release" "$arch")
+    checked="${candidates[*]}"
+
     log "[+] Kernel headers are missing for $release; checking available packages..."
-    for package in linux-headers-rpi-v8 "linux-headers-$release"; do
+    for package in "${candidates[@]}"; do
         if apt_package_available "$package"; then
             log "[+] Installing kernel headers package: $package"
             run_logged apt-get install -y "$package" || {
@@ -312,6 +570,50 @@ module_available() {
         modinfo "$module" >/dev/null 2>&1 && return 0
     done
     return 1
+}
+
+log_driver_compatibility_state() {
+    local release arch candidate candidates module
+    release="$(uname -r)"
+    arch="$(dpkg --print-architecture 2>/dev/null || uname -m 2>/dev/null || echo unknown)"
+    candidates=""
+    while IFS= read -r candidate; do
+        [ -z "$candidate" ] && continue
+        case " $candidates " in
+            *" $candidate "*)
+                continue
+                ;;
+        esac
+        candidates="$candidates $candidate"
+    done < <(header_package_candidates "$release" "$arch")
+
+    log "--- Driver Compatibility State ---"
+    log "[+] Platform profile: $PLATFORM_PROFILE ($PLATFORM_SUPPORT)"
+    log "[+] OS/codename: $PLATFORM_OS_PRETTY / $PLATFORM_OS_CODENAME"
+    log "[+] Architecture: $arch"
+    log "[+] Kernel: $release"
+    log "[+] Header package candidates:${candidates:- none}"
+
+    if kernel_headers_available; then
+        log "[+] Kernel headers: present at /lib/modules/$release/build"
+    else
+        log "[!] Kernel headers: missing at /lib/modules/$release/build"
+    fi
+
+    if command -v dkms >/dev/null 2>&1; then
+        log "[+] DKMS: installed"
+        dkms status >>"$SETUP_LOG" 2>&1 || log "[!] DKMS status returned non-zero."
+    else
+        log "[!] DKMS: missing"
+    fi
+
+    for module in 88XXau 8812au rtw_8812au rtw88_8812au rtl8xxxu mt76x2u mt76_usb mt76 rtw_8822bu rtw88_8822bu 8188eu r8188eu brcmfmac; do
+        if modinfo "$module" >/dev/null 2>&1; then
+            log "[+] Module $module: available"
+        else
+            log "[!] Module $module: missing"
+        fi
+    done
 }
 
 remove_dkms_module_versions() {
@@ -563,21 +865,174 @@ setup_mt7612u() {
 }
 
 configure_zram() {
-    log "[+] Configuring 2GB ZRAM..."
-    cat >/etc/default/zramswap <<'EOF'
+    log "[+] Configuring ${PLATFORM_ZRAM_MB}MB ZRAM for $PLATFORM_PROFILE..."
+    cat >/etc/default/zramswap <<EOF
 ALGO=lz4
-PERCENT=50
-SIZE=2048
+SIZE=$PLATFORM_ZRAM_MB
 EOF
     run_logged systemctl restart zramswap || true
 }
 
-configure_rpi5_fan() {
+boot_config_path() {
     if [ -f /boot/firmware/config.txt ]; then
-        if ! grep -q "fan_temp0=" /boot/firmware/config.txt; then
-            log "[+] Configuring Raspberry Pi 5 Active Cooler thresholds..."
-            cat >>/boot/firmware/config.txt <<'EOF'
+        echo "/boot/firmware/config.txt"
+    elif [ -f /boot/config.txt ]; then
+        echo "/boot/config.txt"
+    else
+        echo ""
+    fi
+}
 
+boot_config_has_key() {
+    local path="$1"
+    local key="$2"
+    grep -Eq "^[[:space:]]*${key}[[:space:]]*=" "$path" 2>/dev/null
+}
+
+expand_rpi_filesystem() {
+    if ! is_raspberry_pi; then
+        log "[+] Skipping Raspberry Pi filesystem expansion on generic Debian SBC."
+        return
+    fi
+    if ! command -v raspi-config >/dev/null 2>&1; then
+        log "[!] raspi-config is not available; skipping filesystem expansion."
+        return
+    fi
+
+    if [ "$PLATFORM_PROFILE" = "rpi_5" ]; then
+        local _root_dev _root_real _is_nvme
+        _root_dev="$(findmnt -n -o SOURCE / 2>/dev/null || true)"
+        _root_real=""
+        if [ -n "$_root_dev" ]; then
+            _root_real="$(readlink -f "$_root_dev" 2>/dev/null || echo "$_root_dev")"
+        fi
+        _is_nvme=0
+        if printf '%s %s' "$_root_dev" "$_root_real" | grep -qE "(nvme|nvm)"; then
+            _is_nvme=1
+        elif [ -n "$_root_real" ] && command -v lsblk >/dev/null 2>&1; then
+            if lsblk -no TRAN "$_root_real" 2>/dev/null | head -1 | grep -q "nvme"; then
+                _is_nvme=1
+            fi
+        fi
+        if [ "$_is_nvme" -eq 1 ]; then
+            log "[+] Root is on NVMe ($PLATFORM_PROFILE); skipping raspi-config expansion."
+            return
+        fi
+        if [ -z "$_root_dev" ]; then
+            log "[!] Pi 5: cannot determine root device reliably; skipping raspi-config expansion to avoid risk."
+            return
+        fi
+    fi
+
+    log "[+] Requesting Raspberry Pi root filesystem expansion via raspi-config..."
+    run_logged raspi-config nonint do_expand_rootfs || log "[!] raspi-config do_expand_rootfs returned non-zero; continuing."
+}
+
+configure_rpi_gpu_memory() {
+    local config_path
+    if ! is_raspberry_pi; then
+        log "[+] Skipping Raspberry Pi GPU memory tuning on generic Debian SBC."
+        return
+    fi
+    if [ -z "$PLATFORM_GPU_MEM_MB" ]; then
+        log "[+] No GPU memory floor defined for $PLATFORM_PROFILE; skipping."
+        return
+    fi
+
+    config_path="$(boot_config_path)"
+    if [ -z "$config_path" ]; then
+        log "[!] Raspberry Pi boot config was not found; cannot set gpu_mem."
+        return
+    fi
+    if boot_config_has_key "$config_path" "gpu_mem"; then
+        log "[+] Existing gpu_mem setting found in $config_path; leaving user value unchanged."
+        return
+    fi
+
+    log "[+] Setting Raspberry Pi GPU memory floor to ${PLATFORM_GPU_MEM_MB}MB in $config_path..."
+    {
+        echo ""
+        echo "[all]"
+        echo "# Ghostlink-Mini: GPU memory floor for $PLATFORM_LABEL"
+        echo "gpu_mem=$PLATFORM_GPU_MEM_MB"
+    } >>"$config_path"
+}
+
+configure_rpi_overclock() {
+    local config_path
+    if ! is_raspberry_pi; then
+        log "[+] Skipping Raspberry Pi overclock tuning on generic Debian SBC."
+        return
+    fi
+    if [ "${GHOSTLINK_DISABLE_RPI_OC:-0}" = "1" ]; then
+        log "[+] GHOSTLINK_DISABLE_RPI_OC=1; skipping Raspberry Pi overclock tuning."
+        return
+    fi
+
+    config_path="$(boot_config_path)"
+    if [ -z "$config_path" ]; then
+        log "[!] Raspberry Pi boot config was not found; cannot apply profile overclock."
+        return
+    fi
+    if boot_config_has_key "$config_path" "arm_freq" || boot_config_has_key "$config_path" "over_voltage" || boot_config_has_key "$config_path" "over_voltage_delta"; then
+        log "[+] Existing overclock/voltage settings found in $config_path; leaving user values unchanged."
+        return
+    fi
+
+    case "$PLATFORM_PROFILE" in
+        rpi_zero_2_w)
+            log "[+] Applying safe Raspberry Pi Zero 2 W CPU profile in $config_path..."
+            cat >>"$config_path" <<'EOF'
+
+[all]
+# Ghostlink-Mini: safe CPU profile for Raspberry Pi Zero 2 W
+arm_freq=1100
+EOF
+            ;;
+        rpi_3b)
+            log "[+] Applying safe Raspberry Pi 3B CPU profile in $config_path..."
+            cat >>"$config_path" <<'EOF'
+
+[all]
+# Ghostlink-Mini: safe CPU profile for Raspberry Pi 3B
+arm_freq=1300
+core_freq=500
+over_voltage=2
+EOF
+            ;;
+        rpi_5)
+            log "[+] Applying safe Raspberry Pi 5 CPU profile in $config_path..."
+            cat >>"$config_path" <<'EOF'
+
+[all]
+# Ghostlink-Mini: safe CPU profile for Raspberry Pi 5
+arm_freq=2600
+EOF
+            ;;
+        *)
+            log "[+] No default overclock is applied for $PLATFORM_PROFILE ($PLATFORM_SUPPORT)."
+            ;;
+    esac
+}
+
+configure_rpi5_fan() {
+    local config_path
+    if [ "$PLATFORM_PROFILE" != "rpi_5" ]; then
+        log "[+] Skipping Raspberry Pi 5 fan tuning for $PLATFORM_PROFILE."
+        return
+    fi
+
+    config_path="$(boot_config_path)"
+    if [ -z "$config_path" ]; then
+        log "[!] Raspberry Pi boot config was not found; cannot set Pi 5 fan thresholds."
+        return
+    fi
+
+    if ! grep -q "fan_temp0=" "$config_path"; then
+        log "[+] Configuring Raspberry Pi 5 Active Cooler thresholds..."
+        cat >>"$config_path" <<'EOF'
+
+[all]
 # Ghostlink-Mini: RPi 5 Active Cooler medium-high profile
 dtparam=fan_temp0=45000
 dtparam=fan_temp0_speed=150
@@ -586,27 +1041,82 @@ dtparam=fan_temp1_speed=200
 dtparam=fan_temp2=65000
 dtparam=fan_temp2_speed=255
 EOF
-        fi
+    else
+        log "[+] Existing Raspberry Pi 5 fan thresholds found in $config_path; leaving user values unchanged."
     fi
 }
 
 configure_rpi5_pcie() {
-    if [ -f /boot/firmware/config.txt ]; then
-        if ! grep -q "pciex1_gen=3" /boot/firmware/config.txt; then
-            log "[+] Enabling PCIe Gen 3 for M.2 SSD..."
-            cat >>/boot/firmware/config.txt <<'EOF'
+    local config_path
+    if [ "$PLATFORM_PROFILE" != "rpi_5" ]; then
+        log "[+] Skipping Raspberry Pi 5 PCIe tuning for $PLATFORM_PROFILE."
+        return
+    fi
 
+    config_path="$(boot_config_path)"
+    if [ -z "$config_path" ]; then
+        log "[!] Raspberry Pi boot config was not found; cannot set Pi 5 PCIe mode."
+        return
+    fi
+
+    if grep -Eq "^[[:space:]]*(dtparam=)?pciex1_gen=" "$config_path"; then
+        log "[+] Existing pciex1_gen setting found in $config_path; preserving user PCIe configuration."
+        return
+    fi
+    log "[+] Enabling PCIe Gen 3 for M.2 SSD..."
+    cat >>"$config_path" <<'EOF'
+
+[all]
 # Ghostlink-Mini: Enable PCIe Gen 3 for M.2 SSD speed boost
 dtparam=pciex1_gen=3
 EOF
-        fi
-    fi
 }
 
 echo "======================================"
 echo "    Ghostlink-Mini Setup Script"
 echo "======================================"
 [ "$UPDATE_MODE" -eq 1 ] && log "Running in UPDATE mode..."
+detect_platform
+log_platform_summary
+log_compatibility_matrix
+
+if [ "$DRY_RUN" -eq 1 ]; then
+    echo ""
+    echo "======================================"
+    echo "    Dry Run — Install Plan"
+    echo "======================================"
+    echo "  Platform : $PLATFORM_MODEL"
+    echo "  Profile  : $PLATFORM_PROFILE ($PLATFORM_SUPPORT)"
+    echo "  OS       : $PLATFORM_OS_PRETTY ($PLATFORM_OS_CODENAME)"
+    echo "  Arch     : $PLATFORM_ARCH"
+    echo "  Kernel   : $PLATFORM_KERNEL"
+    echo "  ZRAM     : ${PLATFORM_ZRAM_MB}MB"
+    if is_raspberry_pi; then
+        _boot_cfg="$(boot_config_path)"
+        echo "  Boot cfg : ${_boot_cfg:-not found}"
+        if [ -n "$PLATFORM_GPU_MEM_MB" ]; then
+            echo "  GPU mem  : ${PLATFORM_GPU_MEM_MB}MB floor"
+        fi
+        if [ "${GHOSTLINK_DISABLE_RPI_OC:-0}" = "1" ]; then
+            echo "  OC       : disabled (GHOSTLINK_DISABLE_RPI_OC=1)"
+        else
+            echo "  OC       : $PLATFORM_OC_SUMMARY"
+        fi
+        if [ "$PLATFORM_PROFILE" = "rpi_5" ]; then
+            echo "  Pi 5 fan : Active Cooler thresholds will be applied"
+            echo "  Pi 5 PCIe: Gen 3 will be enabled"
+        fi
+    else
+        echo "  Pi-specific boot/fan/PCIe steps: skipped (not Raspberry Pi)"
+    fi
+    echo ""
+    echo "  Drivers to prepare: RTL8812AU, MT7612U, RTL88x2BU, RTL8188EUS"
+    echo "  Tools to install  : Wifite2, Airgeddon, aircrack-ng, nmap, hostapd, dnsmasq"
+    echo ""
+    echo "  No changes made (--dry-run)."
+    echo "======================================"
+    exit 0
+fi
 
 if [ "$UPDATE_MODE" -eq 0 ]; then
     echo "This script installs Ghostlink-Mini for Raspberry Pi OS / Debian."
@@ -633,25 +1143,52 @@ set_runtime_permissions
 
 echo ""
 log "--- Kernel Headers ---"
-install_kernel_headers || exit 1
+log_driver_compatibility_state
+HEADERS_OK=0
+if install_kernel_headers; then
+    HEADERS_OK=1
+else
+    log "[!] Kernel headers are missing or could not be installed."
+    log "[!] DKMS-based drivers (RTL8812AU, RTL88x2BU, RTL8188EUS) will be skipped."
+    log "[!] MT7612U (in-kernel mt76) setup will still proceed."
+fi
+log_driver_compatibility_state
 
-install_airgeddon || { log "[-] Failed to install Airgeddon. See $SETUP_LOG"; exit 1; }
-install_wifite2 || { log "[-] Failed to install Wifite2. See $SETUP_LOG"; exit 1; }
+install_airgeddon || log "[!] Failed to install Airgeddon. Run 'sudo ./setup.sh --update' to retry. See $SETUP_LOG"
+install_wifite2 || log "[!] Failed to install Wifite2. Run 'sudo ./setup.sh --update' to retry. See $SETUP_LOG"
 
 configure_management_wifi || log "[!] Management Wi-Fi configuration was skipped or failed; existing network state was left alone."
 
 echo ""
 log "--- Driver Installation ---"
 log "Build/install output is logged to $SETUP_LOG"
-remove_dkms_module_versions rtl88x2bu
-install_rtl8812au_pentest_driver || log "[!] RTL8812AU pentest driver failed; rtw88 fallback will be used if available."
-install_rtw88_driver || { log "[-] Required RTL88x2BU rtw88 driver install failed. See $SETUP_LOG"; exit 1; }
-install_rtl8188eus || log "[!] Optional backup driver RTL8188EUS failed. Continuing; see $SETUP_LOG"
-setup_mt7612u || log "[!] MT7612U setup had warnings. MT7612U may not function until firmware/modules are resolved. See $SETUP_LOG"
+_DRIVER_FAILURES=""
+
+if [ "$HEADERS_OK" -eq 1 ]; then
+    remove_dkms_module_versions rtl88x2bu
+    install_rtl8812au_pentest_driver || { log "[!] RTL8812AU pentest driver failed; see $SETUP_LOG"; _DRIVER_FAILURES="${_DRIVER_FAILURES} RTL8812AU"; }
+    install_rtw88_driver || { log "[!] RTL88x2BU rtw88 driver failed; see $SETUP_LOG"; _DRIVER_FAILURES="${_DRIVER_FAILURES} RTL88x2BU"; }
+    install_rtl8188eus || { log "[!] RTL8188EUS driver failed; see $SETUP_LOG"; _DRIVER_FAILURES="${_DRIVER_FAILURES} RTL8188EUS"; }
+else
+    log "[!] Skipping RTL8812AU, RTL88x2BU, RTL8188EUS driver installs (kernel headers missing)."
+    _DRIVER_FAILURES="${_DRIVER_FAILURES} RTL8812AU RTL88x2BU RTL8188EUS"
+fi
+
+setup_mt7612u || { log "[!] MT7612U setup had warnings; see $SETUP_LOG"; _DRIVER_FAILURES="${_DRIVER_FAILURES} MT7612U"; }
+
+if [ -n "$_DRIVER_FAILURES" ]; then
+    log "[!] Driver install summary — failures:${_DRIVER_FAILURES}"
+    log "[!] Run 'sudo ./setup.sh --update' after resolving kernel headers to retry."
+else
+    log "[+] All driver install steps completed."
+fi
 
 echo ""
 log "--- System Optimizations ---"
 configure_zram
+expand_rpi_filesystem
+configure_rpi_gpu_memory
+configure_rpi_overclock
 configure_rpi5_fan
 configure_rpi5_pcie
 

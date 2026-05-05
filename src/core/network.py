@@ -156,8 +156,33 @@ def _nm_active_wifi_interfaces():
     for line in out.splitlines():
         parts = _split_nmcli_line(line)
         if len(parts) >= 3 and parts[1] == "wifi" and parts[2] == "connected":
-            active.append(parts[0])
+                active.append(parts[0])
     return active
+
+def _known_external_role(iface):
+    driver = get_driver(iface)
+    usb_id = get_usb_id(iface)
+    modalias = get_modalias(iface).lower()
+
+    if usb_id in RTL8812AU_USB_IDS:
+        return "rtl8812au"
+    if usb_id in RTL88X2BU_USB_IDS:
+        return "rtl88x2bu"
+    if usb_id in RTL8188EUS_USB_IDS:
+        return "rtl8188eus"
+    if usb_id in MT7612U_USB_IDS:
+        return "mt7612u"
+    if driver in ["8812au", "88XXau", "rtw_8812au", "rtw88_8812au"]:
+        return "rtl8812au"
+    if driver in ["88x2bu", "rtw_8822bu", "rtw88_8822bu"]:
+        return "rtl88x2bu"
+    if driver in ["r8188eu", "8188eu"]:
+        return "rtl8188eus"
+    if driver == "rtl8xxxu" and any(chip in modalias for chip in ["v2357p010c", "v0bdap8179"]):
+        return "rtl8188eus"
+    if driver in ["mt76x2u", "mt76usb"]:
+        return "mt7612u"
+    return None
 
 def detect_adapters():
     ifaces = get_interfaces()
@@ -169,46 +194,52 @@ def detect_adapters():
         "rtl8188eus": None,
     }
 
+    # Priority 1: saved management interface (must be wireless and not a known active-role adapter)
     saved_map = load_adapter_map()
     saved_management = saved_map.get("management")
-    if saved_management and interface_exists(saved_management):
+    if (saved_management
+            and interface_exists(saved_management)
+            and is_wireless_interface(saved_management)
+            and not _known_external_role(saved_management)):
         adapters["management"] = saved_management
 
-    default_iface = get_default_route_iface()
-    if default_iface and interface_exists(default_iface):
-        adapters["management"] = default_iface
-
+    # Priority 2: detect all known external USB/driver adapters
     for iface in ifaces:
         driver = get_driver(iface)
-        usb_id = get_usb_id(iface)
-        modalias = get_modalias(iface).lower()
-
-        if usb_id in RTL8812AU_USB_IDS:
-            adapters["rtl8812au"] = iface
-        elif usb_id in RTL88X2BU_USB_IDS:
-            adapters["rtl88x2bu"] = iface
-        elif usb_id in RTL8188EUS_USB_IDS:
-            adapters["rtl8188eus"] = iface
-        elif usb_id in MT7612U_USB_IDS:
-            adapters["mt7612u"] = iface
-        elif driver in ["8812au", "88XXau", "rtw_8812au", "rtw88_8812au"] and not adapters["rtl8812au"]:
-            adapters["rtl8812au"] = iface
-        elif driver in ["88x2bu", "rtw_8822bu", "rtw88_8822bu"] and not adapters["rtl88x2bu"]:
-            adapters["rtl88x2bu"] = iface
-        elif (driver in ["r8188eu", "8188eu"] or (driver == "rtl8xxxu" and any(chip in modalias for chip in ["v2357p010c", "v0bdap8179"]))) and not adapters["rtl8188eus"]:
-            adapters["rtl8188eus"] = iface
-        elif driver in ["mt76x2u", "mt76usb"] and not adapters["mt7612u"]:
-            adapters["mt7612u"] = iface
+        role = _known_external_role(iface)
+        if role and not adapters[role]:
+            adapters[role] = iface
         elif driver in ["brcmfmac", "brcmsmac"]:
-            if not adapters["management"]:
+            # Onboard Broadcom: strong management candidate; only set if not already saved
+            if not adapters["management"] or adapters["management"] != saved_management:
                 adapters["management"] = iface
 
+    # Priority 3: NM active Wi-Fi (excluding already-assigned external roles)
     if not adapters["management"]:
-        assigned = {adapters["rtl8812au"], adapters["mt7612u"], adapters["rtl88x2bu"], adapters["rtl8188eus"]}
+        active_ifaces = {adapters["rtl8812au"], adapters["mt7612u"],
+                         adapters["rtl88x2bu"], adapters["rtl8188eus"]}
         for iface in _nm_active_wifi_interfaces():
-            if iface in ifaces and iface not in assigned:
+            if iface in ifaces and iface not in active_ifaces:
                 adapters["management"] = iface
                 break
+
+    # Priority 4: default route as last resort — wireless only, never ethernet
+    if not adapters["management"]:
+        default_iface = get_default_route_iface()
+        active_ifaces = {adapters["rtl8812au"], adapters["mt7612u"],
+                         adapters["rtl88x2bu"], adapters["rtl8188eus"]}
+        if (default_iface
+                and interface_exists(default_iface)
+                and is_wireless_interface(default_iface)
+                and default_iface not in active_ifaces):
+            adapters["management"] = default_iface
+
+    # Deduplication guard: management must not appear in any active role
+    mgmt = adapters["management"]
+    if mgmt:
+        for role in ["rtl8812au", "mt7612u", "rtl88x2bu", "rtl8188eus"]:
+            if adapters[role] == mgmt:
+                adapters[role] = None
 
     save_adapter_map(adapters)
     return adapters

@@ -1,6 +1,6 @@
-# RTL8812AU Driver Strategy - Raspberry Pi 5 (Kernel 6.12+)
+# RTL8812AU Driver Strategy - Raspberry Pi and Debian SBC
 
-This document records the exact steps and strategy required to successfully build and deploy the RTL8812AU driver with monitor mode and packet injection support on a Raspberry Pi 5 running a modern kernel (e.g., `6.12.75+rpt-rpi-2712 aarch64`).
+This document records the steps and strategy used to build and deploy the RTL8812AU driver with monitor mode and packet injection support on Raspberry Pi OS and Debian-based SBCs. The original validation target was Raspberry Pi 5 on a modern kernel (for example, `6.12.75+rpt-rpi-2712 aarch64`), but setup now applies profile-aware Raspberry Pi and Debian SBC compatibility checks before building.
 
 ## The Working Strategy
 
@@ -13,11 +13,11 @@ Through testing, we discovered that the `aircrack-ng/rtl8812au` (`v5.6.4.2` bran
    *   Conflicting modules removed via `modprobe -r`: `rtw_8812au`, `rtw88_8812au`, `rtl8xxxu`, `8812au`, `88XXau`
    *   These modules are then blacklisted via `/etc/modprobe.d/ghostlink-rtl8812au.conf`.
 
-2. **Platform Configuration for aarch64:**
-   The `Makefile` inside the `aircrack-ng` repository defaults to PC architectures (`i386`). For the Raspberry Pi 5, these must be explicitly disabled and swapped to ARM64 configurations using `sed` before building:
+2. **Platform Configuration for ARM:**
+   The `Makefile` inside the `aircrack-ng` repository defaults to PC architectures (`i386`). For Raspberry Pi and ARM SBC builds, these must be explicitly disabled and swapped to the matching ARM configuration using `sed` before building:
    *   Set `CONFIG_PLATFORM_I386_PC = n`
-   *   Set `CONFIG_PLATFORM_ARM64_RPI = y`
-   *   Modify `dkms.conf` to explicitly pass `ARCH=arm64` to the make command.
+   *   On arm64/aarch64, set `CONFIG_PLATFORM_ARM64_RPI = y` and pass `ARCH=arm64`
+   *   On 32-bit ARM, set `CONFIG_PLATFORM_ARM_RPI = y` and pass `ARCH=arm`
 
 3. **Installation Pipeline:**
    ```bash

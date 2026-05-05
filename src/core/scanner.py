@@ -51,7 +51,12 @@ def _check_safety(target, override_large=False, override_auth=False):
 def run_nmap_scan(scan_type, target, override_large=False, override_auth=False):
     if not _check_safety(target, override_large, override_auth):
         return None
-        
+
+    import shutil
+    if not shutil.which("nmap"):
+        print("Error: nmap is not installed. Run 'sudo apt-get install nmap' or 'sudo ./setup.sh --update'.")
+        return None
+
     _ensure_log_dir()
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     out_prefix = os.path.join(SCAN_LOG_DIR, f"scan_{scan_type}_{timestamp}")
